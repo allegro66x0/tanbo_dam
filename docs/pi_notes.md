@@ -262,3 +262,92 @@ python -m pytest -q tests    # 7 passed in 37.75s
 - この Pi の再起動後に自動で立ち上がるかは未確認(再起動していない)
 - モバイル通信は未テスト(モデム未接続、Wi-Fi で運用中)。Phase 4(堅牢化)は未着手
 - GitHub への push は認証がなくできていない。コミットは Pi のローカル `main` にある
+
+## 2026-10-01 エラーの出方の現状確認と、パターンの整理
+
+コードは変更していない。「実機で確認」と書いたもの以外は、コードとテストから読み取った想定。
+
+### エラーが出る場所(現状)
+
+| 場所 | 見えるもの | 見方 |
+|---|---|---|
+| 計測行(SQLite → `data_YYYY-MM`) | ノードごとの `status`、`tx_status`、`rtt_ms`、`raw` | シート / `sudo tanboctl status` / `tanboctl get <n>` |
+| 健全性行(→ `health_YYYY-MM`、`親機`) | `n_ok/n_nodes`、`cycle_ms`、`queue_m/h`、`xbee_ai`、`upload_err`、`synced`、`boot_id` | シート |
+| journal | 親機プロセスの WARNING / ERROR / CRITICAL、systemd の再起動記録 | `journalctl -u tanbo-parent` |
+| `tanboctl` 自身 | 権限なし、サービス停止、設定にないノード | 標準エラー、終了コード 1(実機で確認) |
+| GAS のメール | 親機のハートビートが 40 分途絶 / 復旧 | `checkStale` |
+
+### 現状の出方で気づいた点(実機で確認)
+
+1. **journal の優先度がすべて 6(info)**。レベルは本文の文字列にしかなく、`journalctl -p warning` では絞れない。
+   `journalctl -u tanbo-parent | grep -E "WARNING|ERROR|CRITICAL"` が必要
+2. **送信エラーの文面が 200 文字で切れ、肝心の原因が落ちる**。いまの文面は
+   `ConnectionError: HTTPConnectionPool(host=..., port=9): Max retries exceeded with url: ... Failed to establish a new ` で終わり、
+   末尾の「Connection refused」などが見えない。journal・`tanboctl status`・`health.upload_err` のどれも同じ
+3. **`tanboctl status` の「最終送信」は最後に POST が成功した時刻ではない**。送る行が 0 件でも「成功」として時刻が入る
+   (`uploader.last_ok`)。未送信が残っているのに時刻が出ることがある
+4. **ノードごとの失敗は journal に出ない**。出るのは `cycle 19:10:00: 1/11 OK in 18947 ms` だけ(`BAD_REPLY` のみ WARNING が出る)。
+   どのノードがなぜ失敗したかは DB / シート / `tanboctl status` を見る必要がある
+5. **`tanboctl status` の表に `tx_status` と `rtt_ms` がない**。`TX_FAIL` の種類は `tanboctl get <n>` かシートでしか分からない
+6. **README と GAS「説明」シートの例は 0x21 だが、実機で出たのは 0x24(10 進 36)**。シートには 10 進で入る
+7. 子機ごとの異常を知らせる通知はない(メールは親機の途絶だけ)。`最新` シートの「連続失敗」を見に行く必要がある
+
+### パターンと識別方法
+
+子機・無線側(1 計測行で識別):
+
+| 原因 | status | tx_status | そのほかの手がかり |
+|---|---|---|---|
+| 子機の電源断・ネットワーク未参加 | `TX_FAIL` | 0x24 (36) | 約 1.85 秒で返る。**実機で確認** |
+| 参加済みだが圏外・経路切れ | `TX_FAIL` | 0x21 (33) / 0x25 (37) の想定 | 未確認。同じノードで 0x24 と区別できるはず |
+| 電波の混雑 | `TX_FAIL` | 0x01 / 0x02 の想定 | 未確認 |
+| XBee は生きているが ESP32 が応答しない(固まり、配線、電源) | `TIMEOUT` | 0 | `reply_timeout_s`(3 秒)待つので `cycle_ms` が伸びる |
+| センサーがエコーを取れない | `NO_ECHO`(v2)/ `NO_DATA`(v1) | 0 | v2 は `n_ok=0` |
+| 測定が不安定(エラーではない) | `OK` | 0 | `Valid/Tries` が低い、`EchoMin`〜`EchoMax` の幅が広い |
+| 応答の文字化け・途中切れ | `BAD_REPLY` | 0 | `Raw` に原文、journal に `node N bad reply:` |
+| 応答が遅れて次の番に届く | その回は `TIMEOUT` | 0 | journal に INFO `late reply` / `out-of-turn` / `stale`(v1 は seq がないので遅延と判定できない) |
+| 子機の再起動 | `OK` | 0 | `ChildUptime_s` が前回より小さい(v2 のみ) |
+| 一覧にない XBee からの受信 | 行なし | - | journal に WARNING `frame from unknown MAC`(1 時間に 1 回まで) |
+
+親機 XBee 側(全ノードが同じ status になる):
+
+| 原因 | 見え方 |
+|---|---|
+| XBee が抜けた・ポートが開けない・権限なし | 全ノード `RADIO_ERR`、`XBeeAI` 空、journal に ERROR `XBee open failed:` / `send to node N failed:` / `XBee ping failed:`、`tanboctl status` が `XBee NG`。30 分続くと CRITICAL `fatal: XBee unavailable` で再起動 |
+| AP=1 でない | 上と同じで、文面が `コーディネータは AP=1 が必要` |
+| ネットワーク未形成 | 全ノード `TX_FAIL`、`XBeeAI` が 0 以外 |
+| 全子機が本当に不在 | 全ノード `TX_FAIL`、`XBeeAI = 0`(上と `XBeeAI` で区別) |
+
+送信側(`upload_err` の先頭の例外名と `queue_m` の増加で識別):
+
+| 原因 | `upload_err` の出方 |
+|---|---|
+| 回線断・DNS 不可・URL 未設定 | `ConnectionError: ...`(**実機で確認**。DNS なら文中に `NameResolutionError` の想定) |
+| 回線が遅い | `ReadTimeout` / `ConnectTimeout` |
+| URL 違い・デプロイ削除 | `HTTPError: 404 ...` など |
+| ウェブアプリのアクセスが「全員」でない | `RuntimeError: non-JSON response: '<!DOCTYPE html...'`(ログイン画面が返る想定) |
+| トークン違い | `RuntimeError: GAS error: bad token`(テストで確認) |
+| GAS 側の例外・ロック待ち・割り当て超過 | `RuntimeError: GAS error: <GAS のメッセージ>` / `lock timeout` |
+
+送信が失敗している間は `upload_err` 自体がシートに届かない。その間に外から分かるのは GAS のメール(40 分途絶)だけ。
+
+親機本体(journal と健全性行の途切れ方で識別):
+
+| 原因 | 見え方 |
+|---|---|
+| プロセスが固まった | journal `Failed with result 'watchdog'` → 20 秒後に再起動(**実機で確認**) |
+| プロセスが落ちた | journal にトレースバック、`systemctl show -p NRestarts` が増える。`boot_id` は変わらない |
+| 電源断・OS 再起動 | `BootId` が変わる、`Uptime_h` が小さくなる、健全性行が飛ぶ |
+| 設定ファイルの誤り | 起動のたびに `ConfigError` で落ち、20 秒ごとに再起動を繰り返す。行は増えない |
+| 計測が周期に間に合わない | journal WARNING `cycle overran; skipped slot(s)`、サイクルが抜ける |
+| 時計が未同期・大きく進んだ | `ClockSynced = 0`、journal WARNING `clock jumped forward` |
+| ディスク満杯・DB 書き込み失敗 | journal に `cycle failed` とトレースバック、`DiskFree_MB` が小さい |
+
+### 直すとよさそうな点(未着手。ユーザーと相談)
+
+- ログレベルを journal の優先度に反映する(`<3>` などの接頭辞)→ `journalctl -p warning` で絞れる
+- 送信エラーを「分類 + 末尾の原因」に整える(例 `NET: Connection refused`)。200 文字切りで原因が落ちないようにする
+- 「最終送信」を最後に POST が成功した時刻にし、「最終試行」と分ける
+- サイクルのログに失敗ノードの内訳を 1 行で出す(例 `TX_FAIL(0x24): 1,3-10,12`)。状態が変わったときだけ出す形でもよい
+- `tanboctl status` の表に `tx` と `rtt` の列を足す
+- README と GAS「説明」の TxStatus の例に 0x24(36)を足す
