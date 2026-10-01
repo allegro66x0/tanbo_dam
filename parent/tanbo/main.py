@@ -38,6 +38,17 @@ def sd_notify(msg: str) -> None:
         pass
 
 
+class JournalFormatter(logging.Formatter):
+    """systemd 配下では行頭に <優先度> を付ける(journalctl -p warning で絞れるようにする)。"""
+    PRIO = {logging.DEBUG: 7, logging.INFO: 6, logging.WARNING: 4, logging.ERROR: 3,
+            logging.CRITICAL: 2}
+
+    def format(self, record: logging.LogRecord) -> str:
+        prio = self.PRIO.get(record.levelno, 6)
+        # 複数行(トレースバック)は各行に付けないと 2 行目以降が info になる
+        return "\n".join(f"<{prio}>{line}" for line in super().format(record).splitlines())
+
+
 class App:
     def __init__(self, cfg: config_mod.Config, radio=None):
         self.cfg = cfg
@@ -77,10 +88,11 @@ class App:
                 "radio_open": self.radio.is_open, "local_mac": getattr(self.radio, "local_mac", None),
                 "last_cycle": self.poller.last_cycle,
                 "latest": [{k: r[k] for k in ("node", "ts", "status", "dist_cm", "med_us",
-                                               "n_ok", "n_try", "fw")}
+                                               "n_ok", "n_try", "fw", "tx_status", "rtt_ms")}
                            for r in self.store.latest_by_node()],
                 "unsent": {"m": self.store.unsent_count("m"), "h": self.store.unsent_count("h")},
                 "upload_last_ok": self.uploader.last_ok, "upload_error": self.uploader.last_error,
+                "upload_error_since": self.uploader.error_since,
             }
         if cmd in ("check", "interval"):
             seconds = int(args.get("seconds") or sc.check_interval_s)
@@ -159,12 +171,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-c", "--config", default="/etc/tanbo/parent.toml")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if a.verbose else logging.INFO,
-        format="%(levelname)s %(threadName)s %(name)s: %(message)s"
-        if os.environ.get("INVOCATION_ID") else
-        "%(asctime)s %(levelname)s %(threadName)s %(name)s: %(message)s",
-        stream=sys.stderr)
+    handler = logging.StreamHandler(sys.stderr)
+    if os.environ.get("INVOCATION_ID"):
+        handler.setFormatter(JournalFormatter("%(levelname)s %(threadName)s %(name)s: %(message)s"))
+    else:
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(threadName)s %(name)s: %(message)s"))
+    logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, handlers=[handler])
     logging.getLogger("digi.xbee").setLevel(logging.WARNING)
     faulthandler.enable()   # ウォッチドッグの SIGABRT 時に全スレッドのスタックを journal へ
     cfg = config_mod.load(a.config)

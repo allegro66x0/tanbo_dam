@@ -94,10 +94,34 @@ journalctl -u tanbo-parent -f
 | `OK` | 正常(v2 子機) |
 | `NO_ECHO` | 子機は応答したが有効エコーが 0 回 |
 | `OK_V1` / `NO_DATA` | 旧ファームの子機からの応答 |
-| `TX_FAIL` | XBee の配送失敗。`TxStatus` にコード(0x21 = 経路上で ACK なし、など) |
+| `TX_FAIL` | XBee の配送失敗。`TxStatus` にコード(シートでは 10 進)。0x24 (36) = 宛先が見つからない(子機の電源断・未参加。実機で確認)、0x21 (33) = 経路上で ACK なし、など |
 | `TIMEOUT` | 配送は成功したが応答なし |
 | `BAD_REPLY` | 解析できない応答(`Raw` に原文) |
 | `RADIO_ERR` | 親機の XBee が使えない |
+
+### エラーの見方
+
+```bash
+journalctl -u tanbo-parent -p warning      # WARNING 以上だけ(ログレベルが journal の優先度に入る)
+sudo tanboctl status                       # ノードごとの status / tx(配送コード)/ rtt、送信エラー
+```
+
+- サイクルごとのログに失敗の内訳が出る: `cycle 19:10:00: 1/11 OK in 18947 ms; TX_FAIL(0x24): 1,3-10,12`。
+  内訳が前回から変わったサイクルだけ WARNING、同じ状態が続く間は INFO
+- 配送は成功(`tx` = 0x00)したのに応答がない子機は `TIMEOUT`。子機本体(ESP32・電源・配線)を疑う
+- 全ノードが `TX_FAIL` のときは健全性の `XBeeAI` を見る。0 以外なら親機 XBee がネットワークを作れていない
+- `tanboctl status` の「最終送信成功」は、最後に GAS が受理した時刻(送るものがなかった時刻は含まない)
+
+送信エラー(journal、`tanboctl status`、シートの `UploadErr`)は「分類: 原因」の形:
+
+| 分類 | 意味 |
+|---|---|
+| `NET` | 回線・DNS・接続先。相手に届いていない(例 `NET: ConnectionRefusedError: [Errno 111] Connection refused`) |
+| `TIMEOUT` | 接続(`connect`)または応答(`read`)の時間切れ |
+| `HTTP` | HTTP ステータスが 4xx / 5xx(URL 違い、デプロイ削除など) |
+| `RESP` | JSON でない応答。ウェブアプリのアクセスが「全員」でないとログイン画面が返る |
+| `GAS` | GAS が受理しなかった(`GAS: bad token` など) |
+| `ERR` | その他 |
 
 ### 障害時の自己回復
 

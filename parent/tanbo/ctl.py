@@ -29,17 +29,20 @@ def _print_status(s: dict) -> None:
         print(f"前回サイクル {fmt_ts(lc['cycle_ts'])}  {lc['n_ok']}/{lc['n_nodes']} OK  "
               f"{lc['cycle_ms']} ms")
     up = s["unsent"]
-    print(f"未送信 計測 {up['m']} / 健全性 {up['h']}  最終送信 {fmt_ts(s['upload_last_ok'])}"
-          + (f"  エラー: {s['upload_error']}" if s.get("upload_error") else ""))
+    print(f"未送信 計測 {up['m']} / 健全性 {up['h']}  最終送信成功 {fmt_ts(s['upload_last_ok'])}")
+    if s.get("upload_error"):
+        print(f"送信エラー({fmt_ts(s.get('upload_error_since'))}〜): {s['upload_error']}")
     print()
-    print(f"{'node':>4}  {'時刻':<14} {'status':<9} {'dist20[cm]':>10} {'med[us]':>8} "
-          f"{'ok/try':>6}  fw")
+    print(f"{'node':>4}  {'時刻':<14} {'status':<9} {'tx':>4} {'rtt[ms]':>7} {'dist20[cm]':>10} "
+          f"{'med[us]':>8} {'ok/try':>6}  fw")
     for r in s.get("latest", []):
         d = "-" if r["dist_cm"] is None else f"{r['dist_cm']:.1f}"
         m = "-" if r["med_us"] is None else str(r["med_us"])
         ot = "-" if r["n_try"] is None else f"{r['n_ok']}/{r['n_try']}"
-        print(f"{r['node']:>4}  {fmt_ts(r['ts']):<14} {r['status']:<9} {d:>10} {m:>8} "
-              f"{ot:>6}  {r['fw'] or '-'}")
+        tx = "-" if r.get("tx_status") is None else f"0x{r['tx_status']:02X}"
+        rtt = "-" if r.get("rtt_ms") is None else str(r["rtt_ms"])
+        print(f"{r['node']:>4}  {fmt_ts(r['ts']):<14} {r['status']:<9} {tx:>4} {rtt:>7} {d:>10} "
+              f"{m:>8} {ot:>6}  {r['fw'] or '-'}")
 
 
 def main(argv: list[str] | None = None) -> int:

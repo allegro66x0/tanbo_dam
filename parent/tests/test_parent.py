@@ -20,7 +20,8 @@ from tanbo import config as config_mod  # noqa: E402
 from tanbo import protocol  # noqa: E402
 from tanbo.control import call, parse_duration  # noqa: E402
 from tanbo.main import App  # noqa: E402
-from tanbo.poller import Schedule  # noqa: E402
+from tanbo.poller import PollResult, Schedule, summarize_failures  # noqa: E402
+from tanbo.uploader import UploadRejected, describe_error  # noqa: E402
 
 MACS = {
     0: "0013A200423ECC65", 1: "0013A200423ECBC6", 2: "0013A200423EC0CD",
@@ -165,6 +166,33 @@ def test_parse_duration():
     assert parse_duration("2h") == 7200
 
 
+def test_summarize_failures():
+    def r(node, status, tx=None):
+        return PollResult(node, "X", status, {"tx_status": tx})
+    res = [r(1, "TX_FAIL", 0x24), r(2, "OK_V1", 0), r(3, "TX_FAIL", 0x24), r(4, "TX_FAIL", 0x24),
+           r(5, "TIMEOUT", 0), r(6, "OK", 0), r(7, "TX_FAIL", 0x21), r(12, "TX_FAIL", 0x24)]
+    assert summarize_failures(res) == "TX_FAIL(0x24): 1,3-4,12; TIMEOUT: 5; TX_FAIL(0x21): 7"
+    assert summarize_failures([r(1, "OK"), r(2, "OK_V1")]) == ""
+
+
+def test_describe_error():
+    import requests
+    def err(url, **kw):
+        try:
+            requests.post(url, json={}, timeout=3, **kw)
+        except Exception as e:
+            return describe_error(e)
+    # 接続拒否: 文面の末尾にある原因が残る(以前は 200 文字切りで落ちていた)
+    d = err("http://127.0.0.1:9/x")
+    assert d.startswith("NET: ") and "Connection refused" in d and len(d) < 120, d
+    assert describe_error(UploadRejected("GAS", "bad token")) == "GAS: bad token"
+    assert describe_error(requests.exceptions.ReadTimeout("x")) == "TIMEOUT: read"
+    assert describe_error(requests.exceptions.ConnectTimeout("x")) == "TIMEOUT: connect"
+    resp = requests.Response(); resp.status_code = 404; resp.reason = "Not Found"
+    assert describe_error(requests.exceptions.HTTPError(response=resp)) == "HTTP: 404 Not Found"
+    assert describe_error(ValueError("boom")) == "ERR: ValueError: boom"
+
+
 # ---------------------------------------------------------------- integration
 def test_cycle_statuses_and_upload(env):
     tmp, gas, emu, cfg, children = env
@@ -193,10 +221,13 @@ def test_cycle_statuses_and_upload(env):
 
     # アップロード: 1回目は 500 で失敗 → 未送信のまま、2回目で送信済み
     gas.fail_next = 1
-    with pytest.raises(Exception):
+    with pytest.raises(Exception) as ei:
         app.uploader.upload_once()
+    assert describe_error(ei.value).startswith("HTTP: 500"), describe_error(ei.value)
     assert app.store.unsent_count("m") == 14
+    assert app.uploader.last_ok is None      # 「最終送信成功」は受理された POST だけで進む
     n = app.uploader.upload_once()
+    assert app.uploader.last_ok is not None
     assert n == 14 + 2
     assert app.store.unsent_count("m") == 0 and app.store.unsent_count("h") == 0
     assert len(gas.rows["m"]) == 14 and len(gas.rows["h"]) == 2

@@ -68,6 +68,37 @@ class PollResult:
     row: dict[str, Any] = field(default_factory=dict)
 
 
+def _ranges(nums: list[int]) -> str:
+    """[1, 3, 4, 5, 12] -> '1,3-5,12'"""
+    out: list[str] = []
+    nums = sorted(nums)
+    i = 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        out.append(str(nums[i]) if i == j else f"{nums[i]}-{nums[j]}")
+        i = j + 1
+    return ",".join(out)
+
+
+def summarize_failures(results: list["PollResult"]) -> str:
+    """OK 以外のノードを status(TX_FAIL は配送コード別)ごとにまとめる。
+
+    例: 'TX_FAIL(0x24): 1,3-10,12; TIMEOUT: 2'
+    """
+    groups: dict[str, list[int]] = {}
+    for r in results:
+        if r.status in ("OK", "OK_V1"):
+            continue
+        key = r.status
+        tx = r.row.get("tx_status")
+        if r.status == "TX_FAIL" and tx is not None:
+            key = f"TX_FAIL(0x{tx:02X})"
+        groups.setdefault(key, []).append(r.node)
+    return "; ".join(f"{k}: {_ranges(v)}" for k, v in groups.items())
+
+
 class Poller(threading.Thread):
     def __init__(self, cfg: Config, radio, store: Store,
                  health_extra: Optional[Callable[[], dict[str, Any]]] = None):
@@ -89,6 +120,7 @@ class Poller(threading.Thread):
         self._radio_retry_at = 0.0
         self._unknown_mac_logged: dict[str, float] = {}
         self._self_node_logged: set[int] = set()
+        self._last_fails = ""
         self._boot_id = sysinfo.boot_id()
 
     # ---- radio management -------------------------------------------------
@@ -253,8 +285,13 @@ class Poller(threading.Thread):
         self.last_cycle = {"cycle_ts": cycle_ts, "cycle_ms": cycle_ms, "n_ok": n_ok,
                            "n_nodes": len(results),
                            "status": {r.node: r.status for r in results}}
-        log.info("cycle %s: %d/%d OK in %d ms", time.strftime("%H:%M:%S",
-                 time.localtime(cycle_ts)), n_ok, len(results), cycle_ms)
+        fails = summarize_failures(results)
+        # 失敗の内訳が前回から変わったときだけ WARNING(同じ状態が続く間は INFO)
+        level = logging.WARNING if fails and fails != self._last_fails else logging.INFO
+        self._last_fails = fails
+        log.log(level, "cycle %s: %d/%d OK in %d ms%s", time.strftime("%H:%M:%S",
+                time.localtime(cycle_ts)), n_ok, len(results), cycle_ms,
+                f"; {fails}" if fails else "")
 
         h = {"ts": time.time(), "synced": None if synced is None else int(synced),
              "boot_id": self._boot_id, "interval_s": interval, "cycle_ms": cycle_ms,

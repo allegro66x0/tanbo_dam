@@ -351,3 +351,25 @@ python -m pytest -q tests    # 7 passed in 37.75s
 - サイクルのログに失敗ノードの内訳を 1 行で出す(例 `TX_FAIL(0x24): 1,3-10,12`)。状態が変わったときだけ出す形でもよい
 - `tanboctl status` の表に `tx` と `rtt` の列を足す
 - README と GAS「説明」の TxStatus の例に 0x24(36)を足す
+
+## 2026-10-01 エラー表示の改善(実装・導入済み)
+
+前節「直すとよさそうな点」の 6 項目を実装し、`/opt/tanbo` に入れ直してサービスを再起動した(19:43)。
+プロトコルと GAS に送る列は変えていない(`UploadErr` 列の文面の形式だけ変わる)。
+
+| 項目 | 変更 | 実機での確認 |
+|---|---|---|
+| 送信エラーの文面 | `uploader.describe_error` で「分類: 原因」に整形(NET / TIMEOUT / HTTP / RESP / GAS / ERR) | `NET: ConnectionRefusedError: [Errno 111] Connection refused` |
+| 失敗ノードの内訳 | サイクルのログに追記。内訳が変わったサイクルだけ WARNING | `cycle 19:44:06: 1/11 OK in 18961 ms; TX_FAIL(0x24): 1,3-10,12` |
+| journal の優先度 | systemd 配下では行頭に `<N>` を付ける(`JournalFormatter`) | `journalctl -u tanbo-parent -p warning` で WARNING だけ出た |
+| 最終送信 | `last_ok` は GAS が受理した POST の時刻だけ。`error_since`(連続失敗の開始時刻)を追加 | `最終送信成功 -`、`送信エラー(10-01 19:43:20〜): ...` |
+| `tanboctl status` の表 | `tx`(16 進)と `rtt[ms]` の列を追加 | `TX_FAIL 0x24`、`OK_V1 0x00 151` |
+| 文書 | README に「エラーの見方」、TxStatus の例に 0x24。GAS「説明」に TxStatus と UploadErr の説明 | - |
+
+- テスト 2 件追加(`test_summarize_failures`、`test_describe_error`)、既存テストに HTTP 500 と `last_ok` の確認を追加。計 10 件
+- **`test_service_and_ctl` が 1 回だけ失敗した**(全体実行 5 回 + 単体 8 回のうち 1 回。`assert 7 ...`)。
+  再現せず原因は未特定。10 秒周期の自動サイクルと送信の待ち時間(10 秒)の競合と推測しているが、
+  今回の変更で起きるようになったのか、もとからあったのかは切り分けできていない
+- GAS のテスト(`node gas/test_gas.js`)は Pi に node がなく未実行。`Code.gs` の変更は「説明」シートの文面 2 行だけ
+- 導入確認のため `tanboctl poll` を 1 回実行したので、19:44:06 に 10 分境界でないサイクルが 1 つ記録されている
+- 未確認の分類: `TIMEOUT` / `RESP` / `GAS` / DNS 失敗時の `NET` は実回線では出していない(`GAS` と `HTTP` はテストで確認)
