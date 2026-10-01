@@ -1,0 +1,55 @@
+# 田んぼダム 親機設定 — /etc/tanbo/parent.toml にコピーして編集
+# 変更後は: sudo systemctl restart tanbo-parent
+
+[xbee]
+# /dev/ttyUSB0 はモバイル通信モジュールと番号が入れ替わることがあるので by-id で指定する
+#   ls -l /dev/serial/by-id/
+port = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ04QLF1-if00-port0"
+baud = 9600
+reply_timeout_s = 3.0   # REQ 送信から応答を待つ上限(子機のバースト測定は約0.5秒)
+gap_s = 0.2             # ノード間の送信間隔
+
+[schedule]
+interval_s = 600               # 通常運用: 10分。毎時 00,10,20... 分に揃う
+check_interval_s = 60          # tanboctl check で使う設置チェック用の周期
+check_default_duration_s = 7200   # tanboctl check の既定継続時間(2時間)。過ぎたら自動で通常周期へ
+check_max_duration_s = 86400
+offset_s = 0
+
+[upload]
+url = "https://script.google.com/macros/s/XXXXXXXX/exec"
+token = "GAS のスクリプトプロパティ TOKEN と同じ値"
+parent_id = "parent-1"
+batch_max = 500
+period_s = 60
+timeout_s = 40
+
+[storage]
+# overlayfs でルートを読み取り専用にする場合、ここは rw の別パーティションに置く
+db_path = "/var/lib/tanbo/tanbo.db"
+retain_days = 365
+
+[health]
+# INA219 を付けたらコメントを外す(i2cdetect -y 1 でアドレス確認)
+# ina219_bus = 1
+# ina219_addr = 0x40
+modem = "none"   # ModemManager 管理下のモデムなら "mmcli"
+
+[control]
+socket = "/run/tanbo/ctl.sock"
+
+[nodes]
+# ノード番号 = 子機 XBee の 64bit アドレス(xbee_ID.xlsx)
+0  = "0013A200423ECC65"
+1  = "0013A200423ECBC6"
+2  = "0013A200423EC0CD"
+3  = "0013A200423EB483"
+4  = "0013A200423E9827"
+5  = "0013A200423EB80C"
+6  = "0013A200423EB0A3"
+7  = "0013A200423EB488"
+8  = "0013A200423EC984"
+9  = "0013A200423EB6B4"
+10 = "0013A200423EAFE2"
+11 = "0013A200423EB740"
+12 = "0013A200423EC8E7"
