@@ -88,6 +88,7 @@ class Poller(threading.Thread):
         self._radio_bad_since: Optional[float] = None
         self._radio_retry_at = 0.0
         self._unknown_mac_logged: dict[str, float] = {}
+        self._self_node_logged: set[int] = set()
         self._boot_id = sysinfo.boot_id()
 
     # ---- radio management -------------------------------------------------
@@ -224,6 +225,13 @@ class Poller(threading.Thread):
         for node, mac in self.cfg.nodes.items():
             if self.stop_event.is_set():
                 break
+            if radio_ok and mac == self.radio.local_mac:
+                # 自分宛ての REQ はそのまま折り返ってきて BAD_REPLY になる(実機で確認)
+                if node not in self._self_node_logged:
+                    log.warning("node %d (%s) は親機 XBee 自身のアドレス。計測対象から外す",
+                                node, mac)
+                    self._self_node_logged.add(node)
+                continue
             self.heartbeat = time.monotonic()
             if radio_ok and self.radio.is_open:
                 res = self.poll_one(node, mac)

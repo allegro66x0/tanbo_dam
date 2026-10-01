@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from xbee_emu import ChildModel, XBeeEmulator  # noqa: E402
+from xbee_emu import COORD_MAC, ChildModel, XBeeEmulator  # noqa: E402
 
 from tanbo import config as config_mod  # noqa: E402
 from tanbo import protocol  # noqa: E402
@@ -210,6 +210,18 @@ def test_cycle_statuses_and_upload(env):
     h = gas.rows["h"][0]
     assert h["n_nodes"] == 7 and h["n_ok"] == 2 and h["xbee_ai"] == 0
     json.dump(gas.requests[-3:], open(os.path.join(tmp, "payloads.json"), "w"))
+    app.radio.close()
+
+
+def test_own_address_is_skipped(env):
+    # [nodes] に親機 XBee 自身のアドレスがあっても、折り返しを BAD_REPLY として記録しない
+    tmp, gas, emu, cfg, children = env
+    cfg.nodes[7] = COORD_MAC.hex().upper()
+    app = App(cfg)
+    app.radio.open()
+    res = app.poller.run_cycle(time.time())
+    assert sorted(r.node for r in res) == list(range(7))
+    assert app.poller.last_cycle["n_nodes"] == 7
     app.radio.close()
 
 

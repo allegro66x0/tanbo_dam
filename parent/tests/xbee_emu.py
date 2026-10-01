@@ -120,6 +120,10 @@ class XBeeEmulator:
                 b"\x8b" + bytes([fid]) + b"\xff\xfe" + b"\x00" + bytes([status]) + b"\x00"))
 
     def _on_tx(self, fid, dest, payload: bytes, child: Optional[ChildModel]):
+        if dest == COORD_MAC.hex().upper():
+            # 実機(XBee3 コーディネータ)は自分宛ての送信をそのまま受信として折り返す
+            self._later(0.05, lambda: self.send_rx(dest, payload))
+            return
         if child is None or child.kind == "dead":
             self._tx_status(fid, 0x21, 0.3)   # Network ACK failure
             return

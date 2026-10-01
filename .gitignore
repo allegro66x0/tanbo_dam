@@ -6,3 +6,4 @@ __pycache__/
 *.db-shm
 parent.toml
 !parent/config/parent.example.toml
+*.egg-info/
