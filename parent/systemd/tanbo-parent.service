@@ -10,7 +10,8 @@ Type=notify
 NotifyAccess=main
 User=tanbo
 Group=tanbo
-SupplementaryGroups=dialout i2c
+# FTDI(0403:6001)は openocd / flashrom の udev ルールで plugdev になることがある
+SupplementaryGroups=dialout plugdev i2c
 ExecStart=/opt/tanbo/venv/bin/python -m tanbo -c /etc/tanbo/parent.toml
 WorkingDirectory=/opt/tanbo
 RuntimeDirectory=tanbo

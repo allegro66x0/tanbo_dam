@@ -4,7 +4,7 @@
 [xbee]
 # /dev/ttyUSB0 はモバイル通信モジュールと番号が入れ替わることがあるので by-id で指定する
 #   ls -l /dev/serial/by-id/
-port = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ04QLF1-if00-port0"
+port = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ04PSC2-if00-port0"
 baud = 9600
 reply_timeout_s = 3.0   # REQ 送信から応答を待つ上限(子機のバースト測定は約0.5秒)
 gap_s = 0.2             # ノード間の送信間隔
@@ -40,7 +40,9 @@ socket = "/run/tanbo/ctl.sock"
 
 [nodes]
 # ノード番号 = 子機 XBee の 64bit アドレス(xbee_ID.xlsx)
-0  = "0013A200423ECC65"
+# 0 と 11 は親機用の XBee なので計測対象にしない(子機は 11 台)
+#   0  = "0013A200423ECC65"   現地で稼働中の旧親機
+#   11 = "0013A200423EB740"   v2 親機(この設定を使う Pi)
 1  = "0013A200423ECBC6"
 2  = "0013A200423EC0CD"
 3  = "0013A200423EB483"
@@ -51,5 +53,4 @@ socket = "/run/tanbo/ctl.sock"
 8  = "0013A200423EC984"
 9  = "0013A200423EB6B4"
 10 = "0013A200423EAFE2"
-11 = "0013A200423EB740"
 12 = "0013A200423EC8E7"

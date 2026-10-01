@@ -211,3 +211,54 @@ python -m pytest -q tests    # 7 passed in 37.75s
 2. **GAS(tambo_data2)のデプロイは済んでいるか。** Phase 3 では `/etc/tanbo/parent.toml` に `url` と `token` が必要。
    HANDOFF ではユーザー自身が書くことになっているが、ユーザーは Pi の手元にいない
 3. Phase 3 で旧サービス 2 つ(`xbee_sensor`、`xbee_node`)を無効化してよいか(許可はもらっているが、戻し方を含め念のため)
+
+## 2026-10-01 ユーザーからの回答(2)
+
+- アドレス一覧は「研究室にあった XBee すべて」のメモ。**0 番は現地で稼働中の旧親機、11 番はこの Pi の v2 親機**に使った。
+  子機は 1〜10 と 12 の **11 台**
+- この Pi はいずれ現地の親機を置き換える予定だが、**当面は研究室に置く**(モバイル通信のテストがまだ)
+- GAS(tambo_data2)のデプロイは**まだ**。`url` と `token` はユーザーが自分で書く(会話に出さない)方針で合意
+- この Pi で動かすプログラムは v2 に入れ替えてよい、との指示
+
+## 2026-10-01 Phase 3: サービス化(url / token 未設定のまま常駐)
+
+### やったこと
+
+1. 旧サービスを無効化: `sudo systemctl disable --now xbee_sensor.service xbee_node.service`
+   - ユニットファイル(`/etc/systemd/system/xbee_*.service`)と旧コード(`~/xbee_sensor`、`~/tambokoki`)は残してある
+   - 戻し方: `sudo systemctl disable --now tanbo-parent && sudo systemctl enable --now xbee_sensor.service`
+2. README の手順で導入: ユーザー `tanbo`、`/opt/tanbo`(venv 込み)、`/etc/tanbo/parent.toml`(640 root:tanbo)、
+   `/usr/local/bin/tanboctl`、`/etc/systemd/system/tanbo-parent.service`、`enable --now`
+3. `/etc/tanbo/parent.toml` の内容: `port` は `...AQ04PSC2...`、`[nodes]` は 1〜10 と 12 の 11 台、`interval_s = 600`。
+   **`url` は `http://127.0.0.1:9/unset`(どこにも送らない仮の値)、`token` は example の文言のまま**
+4. `~/tanbo_test.*`(Phase 2 の一時ファイル)は削除した
+
+### README との差(修正済み)
+
+- **`/dev/ttyUSB0` のグループが `dialout` ではなく `plugdev` だった。** FTDI(0403:6001)に対して
+  `60-openocd.rules` / `60-flashrom.rules` が `GROUP="plugdev"` を付けるため(デスクトップ版イメージに入っている)。
+  `tanbo` ユーザーを `dialout,plugdev,i2c` に入れ、ユニットの `SupplementaryGroups` と README の `useradd` にも `plugdev` を足した
+- `parent.example.toml`: `port` をこの Pi の XBee に合わせ、`[nodes]` から 0 と 11 を外して理由をコメントした
+
+### 確認できたこと
+
+- `systemctl status tanbo-parent` が active、journal にエラーなし(送信失敗の WARNING は `url` 未設定のため想定どおり)
+- 最初のサイクルは **18:10:00**(10 分境界)。`1/11 OK in 18944 ms`、Node 2 は `OK_V1` 74.6 cm、ほかは `TX_FAIL`
+- `tanboctl status`(`sudo` で実行)で次回 18:20:00、未送信 計測 11 / 健全性 1
+- **ウォッチドッグ**: 18:10:30 に `systemctl kill -s SIGSTOP` → 18:15:28 に systemd が SIGABRT で落とし(`Failed with result 'watchdog'`)、
+  20 秒後の 18:15:48 に再起動。再起動後も未送信 11 / 1 は SQLite に残っていた
+- 再起動後も XBee を開き直せた
+
+### 未確認 / 残り
+
+- **GAS への送信**: `url` / `token` 未設定のため未確認。未送信は `/var/lib/tanbo/tanbo.db` に溜まり続ける
+  (11 台 × 10 分で 1 日約 1600 行。`retain_days = 365`)。設定後にまとめて送られるはず
+- ユーザーが研究室でやること:
+  1. README「1. GAS」で tambo_data2 にデプロイし、URL と TOKEN を控える
+  2. `sudoedit /etc/tanbo/parent.toml` で `url` と `token` を書く
+  3. `sudo systemctl restart tanbo-parent`、`sudo tanboctl status` で未送信が減ること、シートに行が増えることを確認
+- `tanboctl status` の「最終送信」は、送信失敗中でも時刻が出ることがあった(18:10:18 と表示、実際は未送信 11 件のまま)。
+  表示の意味(最終成功か最終試行か)は未調査
+- この Pi の再起動後に自動で立ち上がるかは未確認(再起動していない)
+- モバイル通信は未テスト(モデム未接続、Wi-Fi で運用中)。Phase 4(堅牢化)は未着手
+- GitHub への push は認証がなくできていない。コミットは Pi のローカル `main` にある

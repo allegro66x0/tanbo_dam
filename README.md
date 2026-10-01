@@ -55,7 +55,7 @@ docs/PROTOCOL.md
 ### インストール
 
 ```bash
-sudo useradd -r -s /usr/sbin/nologin -G dialout,i2c tanbo
+sudo useradd -r -s /usr/sbin/nologin -G dialout,plugdev,i2c tanbo
 sudo mkdir -p /opt/tanbo /etc/tanbo
 sudo cp -r parent/* /opt/tanbo/
 sudo python3 -m venv /opt/tanbo/venv
