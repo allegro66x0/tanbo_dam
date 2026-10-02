@@ -401,3 +401,16 @@ python -m pytest -q tests    # 7 passed in 37.75s
 - GitHub への push(Pi に認証がない。ローカル `main` が origin より 5 コミット先)
 - `test_service_and_ctl` の偶発的な失敗の原因
 - 子機の v2 ファームへの入れ替え(現状は Node 2 が旧ファームで `OK_V1`)
+
+### 10:06〜10:12 に USB の通信端末が挿されていた(送信が一時失敗 → 自動復旧)
+
+- カーネルログ: 10:06:03 に USB 1782:4d00 → 切り替わって **1782:4d27「Unisoc Phone」**、`rndis_host` で `usb0` ができた。10:12:21 に抜かれた
+  (Pi の手元にいる誰かが挿したと思われる。ユーザーに確認する)
+- NetworkManager が有線用の接続設定 `netplan-eth0` を `usb0` に適用し、DHCP で 192.168.100.2 を取得、
+  **Wi-Fi より優先して既定経路と DNS が `usb0` に切り替わった**
+- その間の送信は `NET: gaierror: [Errno -3] Temporary failure in name resolution` で失敗(10:11:15、10:12:03)。
+  つまり端末経由では名前解決ができていなかった(SIM 未開通・圏外・APN 未設定などの可能性。未調査)
+- 抜かれたあと Wi-Fi に戻り、10:13:22 に送信成功。10:10 のサイクル分(計測 11 / 健全性 1)も送られて未送信 0 / 0
+- XBee(`/dev/ttyUSB0`)には影響なし。この端末は ttyUSB を生やさず、ModemManager も不要な RNDIS(USB テザリング型)だった
+- モバイル通信テストへの示唆: この型の端末は挿すだけで既定経路になる。回線が通じていない端末を挿しっぱなしにすると、
+  Wi-Fi があっても送信できなくなる。`[health] modem = "mmcli"` の電波強度はこの型では取れない
