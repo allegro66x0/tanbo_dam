@@ -373,3 +373,22 @@ python -m pytest -q tests    # 7 passed in 37.75s
 - GAS のテスト(`node gas/test_gas.js`)は Pi に node がなく未実行。`Code.gs` の変更は「説明」シートの文面 2 行だけ
 - 導入確認のため `tanboctl poll` を 1 回実行したので、19:44:06 に 10 分境界でないサイクルが 1 つ記録されている
 - 未確認の分類: `TIMEOUT` / `RESP` / `GAS` / DNS 失敗時の `NET` は実回線では出していない(`GAS` と `HTTP` はテストで確認)
+
+## 2026-10-02 GAS への送信を開始
+
+- ユーザーが tambo_data2 に `Code.gs`(コミット 519aea9 の版)をデプロイした。ブラウザで `/exec` を開いて `{"ok":true,...}` を確認済みとのこと
+- ユーザーの了承のもと、URL とトークンを会話経由で受け取り、こちらで `/etc/tanbo/parent.toml` に書いた(値はここには書かない)。
+  書き換え前の設定は `/etc/tanbo/parent.toml.bak`(仮の URL のもの、640 root:tanbo)
+- 10:03:45 に `systemctl restart tanbo-parent`
+
+### 結果
+
+- 溜まっていた分がすべて送られた: 健全性 97 行、計測 1067 行(2026-10-01 18:10 〜 2026-10-02 10:00)。未送信 0 / 0
+- 送信は 500 行ずつ。健全性 97 → 計測 500 → 500 までは約 17 秒で完了
+- **3 回目(残り 67 行)で GAS が一度だけエラーを返した**:
+  `GAS: This operation is not supported for this document: <スプレッドシート ID>`(10:04:18)。
+  30 秒後の自動再送(10:04:53)で `uploaded 67 rows` / `upload recovered` となり解消。親機側では何もしていない
+  - 原因は未特定。同じ呼び出しが 30 秒後には通ったので、Google 側の一時的なエラーと見ている。
+    繰り返すようなら `health` シートの `UploadErr` に同じ文面が残るので、頻度を見る
+  - エラー表示の改善(分類 `GAS:`、`送信エラー(時刻〜)`、`upload recovered`)は実回線でも意図どおりに出た
+- シート側の見え方(`data_2026-10`、`health_2026-10`、`最新`、`親機`)はユーザーに確認を依頼中。重複がないかも見てもらう
