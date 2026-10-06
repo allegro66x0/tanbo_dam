@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS measurements (
     raw TEXT, sent INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_meas_unsent ON measurements(sent, id);
+CREATE INDEX IF NOT EXISTS ix_meas_node_id ON measurements(node, id);
+CREATE INDEX IF NOT EXISTS ix_meas_node_ts ON measurements(node, ts);
 CREATE TABLE IF NOT EXISTS health (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL, synced INTEGER, boot_id TEXT, uptime_s REAL, interval_s INTEGER,

@@ -38,6 +38,13 @@ modem = "none"   # ModemManager 管理下のモデムなら "mmcli"
 [control]
 socket = "/run/tanbo/ctl.sock"
 
+[web]
+# 操作画面(tanbo-web)。スマホから Tailscale 経由で http://<親機のTailscale名>:8080/ を開く
+bind = "0.0.0.0"
+port = 8080
+# この I/F に届いた接続だけ受け付ける。LTE・Wi-Fi・USB 通信端末の側からは開けない
+allow_interfaces = ["lo", "tailscale0"]
+
 [nodes]
 # ノード番号 = 子機 XBee の 64bit アドレス(xbee_ID.xlsx)
 # 0 と 11 は親機用の XBee なので計測対象にしない(子機は 11 台)

@@ -57,6 +57,14 @@ class ControlCfg:
 
 
 @dataclass
+class WebCfg:
+    bind: str = "0.0.0.0"
+    port: int = 8080
+    # この I/F に届いた接続だけ受け付ける(LTE 側からは開けない)。空リストなら制限なし
+    allow_interfaces: list[str] = field(default_factory=lambda: ["lo", "tailscale0"])
+
+
+@dataclass
 class Config:
     xbee: XBeeCfg
     upload: UploadCfg
@@ -64,6 +72,7 @@ class Config:
     storage: StorageCfg = field(default_factory=StorageCfg)
     health: HealthCfg = field(default_factory=HealthCfg)
     control: ControlCfg = field(default_factory=ControlCfg)
+    web: WebCfg = field(default_factory=WebCfg)
     nodes: dict[int, str] = field(default_factory=dict)   # node -> MAC(大文字16桁)
 
     def mac_to_node(self) -> dict[str, int]:
@@ -100,6 +109,7 @@ def load(path: str | Path) -> Config:
         storage=_section(raw, "storage", StorageCfg),
         health=_section(raw, "health", HealthCfg),
         control=_section(raw, "control", ControlCfg),
+        web=_section(raw, "web", WebCfg),
     )
     nodes = {}
     for k, v in (raw.get("nodes") or {}).items():
@@ -118,6 +128,8 @@ def load(path: str | Path) -> Config:
             raise ConfigError(f"schedule.{name} は 10〜86400 秒")
     if cfg.xbee.reply_timeout_s <= 0:
         raise ConfigError("xbee.reply_timeout_s は正の値")
+    if not 1 <= cfg.web.port <= 65535:
+        raise ConfigError("web.port は 1〜65535")
     if cfg.health.modem not in ("none", "mmcli"):
         raise ConfigError("health.modem は none / mmcli")
     if (cfg.health.ina219_addr is None) != (cfg.health.ina219_bus is None):

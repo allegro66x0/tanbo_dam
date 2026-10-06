@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f4f1" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121a17" media="(prefers-color-scheme: dark)">
+<title>田んぼダム 親機</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f2f4f1;
+  --surface: #ffffff;
+  --ink: #17241f;
+  --ink-2: #4d5b55;
+  --ink-3: #6f7c76;
+  --rule: #d5ddd8;
+  --water: #2a78d6;
+  --water-band: rgba(42, 120, 214, 0.18);
+  --water-fill: #cde2fb;
+  --paddy: #2f6b3a;
+  --paddy-ink: #ffffff;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --banner: #fdeceb;
+  --focus: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #121a17;
+    --surface: #1a2420;
+    --ink: #edf2ef;
+    --ink-2: #b4c0ba;
+    --ink-3: #8d9a94;
+    --rule: #2c3833;
+    --water: #3987e5;
+    --water-band: rgba(57, 135, 229, 0.25);
+    --water-fill: #184f95;
+    --paddy: #4f9a5c;
+    --paddy-ink: #0d1411;
+    --banner: #3a1f1d;
+    --focus: #6da7ec;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+button, select { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 640px; margin: 0 auto; padding: 0 16px calc(32px + env(safe-area-inset-bottom)); }
+
+/* header */
+header {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+  padding: calc(10px + env(safe-area-inset-top)) 0 10px;
+}
+header .wrap { display: flex; align-items: center; gap: 12px; padding-bottom: 0; }
+header h1 { font-size: 17px; font-weight: 700; margin: 0; flex: 1; letter-spacing: 0.02em; }
+.svc { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.svc .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-3); }
+.svc.ok .dot { background: var(--good); }
+.svc.ng .dot { background: var(--critical); }
+.updated { font-size: 12px; color: var(--ink-3); }
+
+.banner {
+  margin: 12px 0 0; padding: 12px 14px; border-radius: 10px;
+  background: var(--banner); border-left: 4px solid var(--critical);
+}
+.banner.warn { border-left-color: var(--warning); background: var(--surface); }
+.banner p { margin: 0; }
+.banner p + p { margin-top: 6px; }
+.banner code { font-size: 13px; }
+
+/* mode */
+.mode { padding: 18px 0 16px; border-bottom: 1px solid var(--rule); }
+.mode h2 { font-size: 22px; font-weight: 700; margin: 0 0 2px; }
+.mode .sub { color: var(--ink-2); margin: 0 0 14px; }
+.mode.checking h2 { color: var(--water); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn {
+  min-height: 44px; padding: 0 16px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--rule); background: var(--surface); font-weight: 600;
+}
+.btn.primary { background: var(--paddy); color: var(--paddy-ink); border-color: var(--paddy); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn.busy { position: relative; color: transparent; }
+.btn.busy::after {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 18px; height: 18px;
+  border: 2px solid var(--ink-3); border-top-color: transparent; border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+select.dur {
+  min-height: 44px; padding: 0 10px; border-radius: 10px;
+  border: 1px solid var(--rule); background: var(--surface);
+}
+.more { margin-top: 10px; }
+.more .btn { font-weight: 500; flex: 1 1 0; padding: 0 10px; font-size: 14px; }
+
+/* summary */
+.summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.summary dt { font-size: 12px; color: var(--ink-3); }
+.summary dd { margin: 0; font-size: 15px; font-weight: 600; }
+.summary dd small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); }
+
+/* nodes */
+.nodes-head { display: flex; align-items: baseline; justify-content: space-between; padding: 18px 0 6px; }
+.nodes-head h2 { font-size: 15px; margin: 0; color: var(--ink-2); font-weight: 600; }
+.nodes-head span { font-size: 12px; color: var(--ink-3); }
+ul.nodes { list-style: none; margin: 0; padding: 0; }
+li.node { border-bottom: 1px solid var(--rule); }
+.node-row {
+  display: grid; grid-template-columns: 22px 40px 1fr auto; gap: 10px; align-items: center;
+  width: 100%; padding: 10px 0; background: none; border: 0; text-align: left; cursor: pointer;
+}
+.node-row .num { font-size: 22px; font-weight: 700; text-align: right; }
+.node-row .mid { min-width: 0; }
+.node-row .st { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.node-row .meta { display: block; font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-row .meta.stale { color: var(--ink); }
+.node-row .dist { font-size: 26px; font-weight: 650; text-align: right; line-height: 1.1; }
+.node-row .dist small { font-size: 13px; font-weight: 400; color: var(--ink-2); margin-left: 2px; }
+.node-row .dist.dim { color: var(--ink-3); }
+.ico {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  font-size: 11px; font-weight: 800; color: #fff; flex: none;
+}
+.ico.good { background: var(--good); }
+.ico.warning { background: var(--warning); color: #1a1300; }
+.ico.serious { background: var(--serious); color: #1a0a00; }
+.ico.critical { background: var(--critical); }
+.ico.none { background: var(--ink-3); }
+
+.detail { padding: 0 0 16px; }
+.detail[hidden] { display: none; }
+.chips { display: flex; gap: 6px; margin: 2px 0 8px; }
+.chip {
+  min-height: 34px; padding: 0 12px; border-radius: 17px; border: 1px solid var(--rule);
+  background: var(--surface); cursor: pointer; font-size: 13px;
+}
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chart { position: relative; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; }
+.chart svg { display: block; width: 100%; height: 200px; touch-action: pan-y; }
+.chart .axis text { fill: var(--ink-3); font-size: 11px; }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .line { fill: none; stroke: var(--water); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .band { fill: var(--water-band); }
+.chart .pt { fill: var(--water); stroke: var(--surface); stroke-width: 2; }
+.chart .fail { stroke: var(--critical); stroke-width: 2; }
+.chart .cross { stroke: var(--ink-2); stroke-width: 1; }
+.chart .empty { fill: var(--ink-3); font-size: 13px; }
+.tip {
+  position: absolute; top: 8px; pointer-events: none; background: var(--ink); color: var(--bg);
+  padding: 6px 8px; border-radius: 6px; font-size: 12px; line-height: 1.4; white-space: nowrap;
+}
+.tip[hidden] { display: none; }
+.cap { font-size: 12px; color: var(--ink-3); margin: 6px 2px 0; }
+.facts { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--ink-2); margin: 10px 0; }
+.facts b { color: var(--ink); font-weight: 600; }
+.getres { font-size: 14px; margin: 8px 0 0; min-height: 1.5em; }
+
+/* parent health */
+details.parent { margin-top: 22px; border-top: 1px solid var(--rule); padding-top: 12px; }
+details.parent summary { cursor: pointer; font-weight: 600; color: var(--ink-2); min-height: 32px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 8px 0 0; font-size: 14px; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; }
+.cycles { display: flex; gap: 2px; align-items: flex-end; height: 34px; margin: 12px 0 2px; }
+.cycles i { flex: 1; background: var(--good); border-radius: 2px 2px 0 0; min-height: 2px; }
+.cycles i.part { background: var(--warning); }
+.cycles i.none { background: var(--critical); }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  max-width: calc(100% - 32px); background: var(--ink); color: var(--bg);
+  padding: 10px 14px; border-radius: 10px; font-size: 14px; z-index: 10;
+}
+.toast[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .btn.busy::after { animation: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>田んぼダム 親機</h1>
+    <span class="svc" id="svc"><span class="dot"></span><span id="svc-text">確認中</span></span>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="banner" id="banner" hidden></div>
+
+  <section class="mode" id="mode">
+    <h2 id="mode-title">—</h2>
+    <p class="sub" id="mode-sub"></p>
+    <div class="row" id="mode-actions"></div>
+    <div class="row more">
+      <button class="btn" id="btn-poll" type="button">全ノードを今すぐ計測</button>
+      <button class="btn" id="btn-flush" type="button">未送信を今すぐ送る</button>
+    </div>
+  </section>
+
+  <dl class="summary" id="summary">
+    <div><dt>前回の計測</dt><dd id="s-cycle">—</dd></div>
+    <div><dt>未送信</dt><dd id="s-queue">—</dd></div>
+    <div><dt>最終送信</dt><dd id="s-upload">—</dd></div>
+  </dl>
+
+  <div class="nodes-head"><h2>ノード</h2><span id="updated" class="updated"></span></div>
+  <ul class="nodes" id="nodes"></ul>
+
+  <details class="parent" id="parent">
+    <summary>親機の状態</summary>
+    <div class="cycles" id="cycles" aria-label="直近のサイクルごとの応答数"></div>
+    <p class="cap" id="cycles-cap"></p>
+    <dl class="kv" id="kv"></dl>
+  </details>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const GAUGE_MAX = 100;   // ゲージの下端(cm)
+const STATUS = {
+  OK:        ["good", "✓", "正常"],
+  OK_V1:     ["good", "✓", "正常(旧ファーム)"],
+  NO_ECHO:   ["warning", "!", "エコーなし"],
+  NO_DATA:   ["warning", "!", "データなし"],
+  BAD_REPLY: ["serious", "!", "応答が読めない"],
+  TIMEOUT:   ["critical", "✕", "応答なし"],
+  TX_FAIL:   ["critical", "✕", "届かない"],
+  RADIO_ERR: ["critical", "✕", "親機XBee異常"],
+};
+const isOk = (s) => s === "OK" || s === "OK_V1";
+// XBee の Transmit Status(配送コード)
+const TX = {
+  0x01: "MAC 層で ACK なし", 0x02: "電波の混雑(CCA)", 0x15: "宛先エンドポイント不正",
+  0x21: "経路上で ACK なし", 0x22: "親機がネットワーク未参加", 0x23: "自分宛て",
+  0x24: "宛先が見つからない", 0x25: "経路が見つからない", 0x2C: "XBee の資源不足",
+  0x74: "データが大きすぎる",
+};
+// 一覧の1行に収まる短い表記
+const TX_SHORT = { 0x01: "ACK なし", 0x02: "混雑", 0x21: "ACK なし", 0x22: "親機が未参加",
+  0x24: "宛先なし", 0x25: "経路なし" };
+const txHex = (c) => "0x" + c.toString(16).toUpperCase().padStart(2, "0");
+const txText = (c) => `${txHex(c)} ${TX[c] || "配送失敗"}`;
+let state = { ov: null, open: new Set(), range: {}, hist: {}, lastCycle: null };
+
+// ---------- formatting
+const pad = (n) => String(n).padStart(2, "0");
+function hm(ts) { const d = new Date(ts * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function hms(ts) { const d = new Date(ts * 1000); return `${hm(ts)}:${pad(d.getSeconds())}`; }
+function md(ts) { const d = new Date(ts * 1000); return `${d.getMonth() + 1}/${d.getDate()}`; }
+function when(ts) {
+  if (ts == null) return "—";
+  const now = Date.now() / 1000;
+  return (now - ts > 20 * 3600) ? `${md(ts)} ${hm(ts)}` : hm(ts);
+}
+function ago(ts) {
+  if (ts == null) return "なし";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 90) return "たった今";
+  if (s < 3600) return `${Math.round(s / 60)}分前`;
+  if (s < 7200) return `1時間${Math.round((s - 3600) / 60)}分前`;
+  if (s < 86400 * 2) return `${Math.floor(s / 3600)}時間前`;
+  return `${Math.floor(s / 86400)}日前`;
+}
+function dur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h ? `${h}時間${m}分` : `${m}分`;
+}
+function period(sec) { return sec % 60 === 0 ? `${sec / 60}分` : `${sec}秒`; }
+const cm = (v) => (v == null ? "—" : v.toFixed(1));
+const usToCm = (us) => (us == null ? null : us * 0.03434 / 2);
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function statusBadge(s) {
+  const [cls, icon, label] = STATUS[s] || ["none", "–", s ? s : "未計測"];
+  return `<span class="ico ${cls}" aria-hidden="true">${icon}</span><span>${esc(label)}</span>`;
+}
+
+// ---------- api
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let body = null;
+  try { body = await r.json(); } catch (e) { /* ignore */ }
+  if (!r.ok) throw new Error((body && body.error) || `HTTP ${r.status}`);
+  return body;
+}
+async function command(cmd, args, btn) {
+  if (btn) { btn.disabled = true; btn.classList.add("busy"); }
+  try {
+    return await api("/api/cmd", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Tanbo-Request": "1" },
+      body: JSON.stringify({ cmd, args: args || {} }),
+    });
+  } catch (e) {
+    toast(e.message);
+    return null;
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("busy"); }
+    refresh();
+  }
+}
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 4500);
+}
+
+// ---------- render: header, mode, summary
+function render() {
+  const ov = state.ov;
+  const svc = ov.service;
+  $("svc").className = "svc " + (svc ? (svc.radio_open ? "ok" : "ng") : "ng");
+  $("svc-text").textContent = svc ? (svc.radio_open ? "稼働中" : "XBee 異常") : "停止";
+  $("updated").textContent = `${hms(ov.now)} 時点`;
+
+  const banner = $("banner");
+  const msgs = [];
+  let severe = false;
+  if (ov.service_error || (svc && !svc.radio_open) || ov.db_error) severe = true;
+  if (ov.service_error) msgs.push(`<p>${esc(ov.service_error)}。記録済みのデータだけ表示しています。SSH で <code>sudo systemctl status tanbo-parent</code> を確認してください。</p>`);
+  if (svc && !svc.radio_open) msgs.push(`<p>親機の XBee が開けていません。USB に挿さっているか確認してください。挿せば30秒以内に自動で再開します。</p>`);
+  if (svc && svc.clock_synced === false) msgs.push(`<p>親機の時計がまだ同期していません。回線がつながると直ります。</p>`);
+  if (ov.db_error) msgs.push(`<p>${esc(ov.db_error)}</p>`);
+  banner.innerHTML = msgs.join("");
+  banner.hidden = msgs.length === 0;
+  banner.className = "banner" + (severe ? "" : " warn");
+
+  const mode = $("mode"), actions = $("mode-actions");
+  const enabled = !!svc;
+  for (const b of [$("btn-poll"), $("btn-flush")]) b.disabled = !enabled;
+  if (!svc) {
+    mode.className = "mode";
+    $("mode-title").textContent = "計測停止中";
+    $("mode-sub").textContent = "計測サービスが動くと操作できます。";
+    actions.innerHTML = "";
+  } else if (svc.override_until) {
+    mode.className = "mode checking";
+    $("mode-title").textContent = "設置チェック中";
+    $("mode-sub").textContent = `${period(svc.interval_s)}ごとに計測。あと${dur(svc.override_until - ov.now)}で通常(${period(svc.base_interval_s)}ごと)に戻ります。次回 ${hms(svc.next_slot)}`;
+    if (!actions.dataset.mode || actions.dataset.mode !== "check") {
+      actions.dataset.mode = "check";
+      actions.innerHTML = `<button class="btn primary" id="btn-normal" type="button">通常運用に戻す</button>`;
+      $("btn-normal").onclick = async (e) => {
+        const r = await command("normal", {}, e.currentTarget);
+        if (r) toast(`通常運用に戻しました(${period(r.interval_s)}ごと)`);
+      };
+    }
+  } else {
+    mode.className = "mode";
+    $("mode-title").textContent = "通常運用";
+    $("mode-sub").textContent = `${period(svc.interval_s)}ごとに計測。次回 ${hm(svc.next_slot)}`;
+    if (actions.dataset.mode !== "normal") {
+      actions.dataset.mode = "normal";
+      const def = ov.check_default_duration_s;
+      const opts = [[1800, "30分"], [3600, "1時間"], [7200, "2時間"], [21600, "6時間"]]
+        .map(([v, l]) => `<option value="${v}"${v === def ? " selected" : ""}>${l}</option>`).join("");
+      actions.innerHTML =
+        `<button class="btn primary" id="btn-check" type="button">設置チェックを始める(${period(ov.check_interval_s)}ごと)</button>` +
+        `<select class="dur" id="check-dur" aria-label="設置チェックを続ける時間">${opts}</select>`;
+      $("btn-check").onclick = async (e) => {
+        const d = parseInt($("check-dur").value, 10);
+        const r = await command("check", { duration: d }, e.currentTarget);
+        if (r) toast(`設置チェックを始めました。${hm(r.until)}まで${period(r.interval_s)}ごとに計測します`);
+      };
+    }
+  }
+  if (!svc) actions.dataset.mode = "";
+
+  const lc = svc && svc.last_cycle && svc.last_cycle.cycle_ts ? svc.last_cycle : null;
+  const h0 = ov.health[0];
+  if (lc) $("s-cycle").innerHTML = `${hm(lc.cycle_ts)} <small>${lc.n_ok}/${lc.n_nodes} 応答</small>`;
+  else if (h0) $("s-cycle").innerHTML = `${when(h0.ts)} <small>${h0.n_ok}/${h0.n_nodes} 応答</small>`;
+  else $("s-cycle").textContent = "—";
+  $("s-queue").innerHTML = svc ? `${svc.unsent.m} 件` : (h0 ? `${h0.queue_m} 件` : "—");
+  $("s-upload").innerHTML = svc ? (svc.upload_error ? `<span class="ico critical" aria-hidden="true">✕</span> 失敗中` : when(svc.upload_last_ok)) : "—";
+
+  renderNodes();
+  renderParent();
+}
+
+// ---------- nodes
+function gauge(dist) {
+  const H = 52, W = 22, top = 2, h = H - 4;
+  let marks = "";
+  for (let c = 0; c <= GAUGE_MAX; c += 10) {
+    const y = top + (c / GAUGE_MAX) * h;
+    marks += `<line x1="0" x2="${c % 50 === 0 ? 7 : 4}" y1="${y}" y2="${y}" stroke="var(--ink-3)" stroke-width="1"/>`;
+  }
+  let water = "";
+  if (dist != null) {
+    const y = top + Math.min(dist, GAUGE_MAX) / GAUGE_MAX * h;
+    water = `<rect x="9" y="${y}" width="${W - 11}" height="${top + h - y}" fill="var(--water-fill)"/>` +
+            `<line x1="8" x2="${W - 1}" y1="${y}" y2="${y}" stroke="var(--water)" stroke-width="2.5"/>`;
+  }
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" aria-hidden="true">` +
+    `<rect x="9" y="${top}" width="${W - 11}" height="${h}" fill="none" stroke="var(--rule)"/>` +
+    `<rect x="7" y="0" width="${W - 7}" height="3" rx="1" fill="var(--ink-2)"/>` +
+    water + marks + `</svg>`;
+}
+
+function renderNodes() {
+  const ul = $("nodes");
+  const svc = state.ov.service;
+  const interval = svc ? svc.interval_s : 600;
+  for (const n of state.ov.nodes) {
+    let li = ul.querySelector(`li[data-node="${n.node}"]`);
+    if (!li) {
+      li = document.createElement("li");
+      li.className = "node"; li.dataset.node = n.node;
+      li.innerHTML = `<button class="node-row" type="button" aria-expanded="false"></button>` +
+        `<div class="detail" hidden></div>`;
+      ul.appendChild(li);
+      li.querySelector(".node-row").onclick = () => toggle(n.node);
+    }
+    const last = n.last;
+    const ok = last && isOk(last.status);
+    const dist = ok ? last.dist_cm : null;
+    const stale = last && (state.ov.now - last.ts > interval * 2.5 + 60);
+    let meta;
+    if (!last) meta = "まだ記録がありません";
+    else if (ok) meta = `${last.n_try ? `${last.n_ok}/${last.n_try} 有効` : "旧ファーム"}、${ago(last.ts)}`;
+    else if (last.status === "TX_FAIL" && last.tx_status) meta = `${n.fails}回連続、${TX_SHORT[last.tx_status] || txHex(last.tx_status)}`;
+    else meta = n.last_ok_ts ? `${n.fails}回連続、右は${ago(n.last_ok_ts)}の値` : `${n.fails}回連続、正常値なし`;
+    if (stale) meta = `⚠ 前回の記録 ${ago(last.ts)}`;
+    const row = li.querySelector(".node-row");
+    row.setAttribute("aria-label", `ノード ${n.node}`);
+    row.innerHTML =
+      gauge(ok ? dist : null) +
+      `<span class="num">${n.node}</span>` +
+      `<span class="mid"><span class="st">${statusBadge(last && last.status)}</span>` +
+      `<span class="meta${stale ? " stale" : ""}">${esc(meta)}</span></span>` +
+      `<span class="dist${ok ? "" : " dim"}">${ok ? cm(dist) : (n.last_ok_dist != null ? cm(n.last_ok_dist) : "—")}<small>cm</small></span>`;
+    if (state.open.has(n.node)) renderDetailFacts(n);
+  }
+}
+
+function toggle(node) {
+  const li = $("nodes").querySelector(`li[data-node="${node}"]`);
+  const det = li.querySelector(".detail"), row = li.querySelector(".node-row");
+  if (state.open.has(node)) {
+    state.open.delete(node); det.hidden = true; row.setAttribute("aria-expanded", "false");
+    return;
+  }
+  state.open.add(node); row.setAttribute("aria-expanded", "true");
+  const r = state.range[node] || (state.ov.service && state.ov.service.override_until ? 6 : 24);
+  state.range[node] = r;
+  det.innerHTML =
+    `<div class="chips" role="group" aria-label="表示する期間">` +
+    [[1, "1時間"], [6, "6時間"], [24, "24時間"], [168, "7日"]].map(([h, l]) =>
+      `<button class="chip" type="button" data-h="${h}" aria-pressed="${h === r}">${l}</button>`).join("") +
+    `</div><div class="chart"><svg role="img"></svg><div class="tip" hidden></div></div>` +
+    `<p class="cap">センサーから水面までの距離(cm)。上ほど水位が高い。帯は1回の計測内のばらつき、下の赤い印は失敗。</p>` +
+    `<div class="facts"></div>` +
+    `<div class="row"><button class="btn" type="button" data-act="get">このノードに今すぐ問い合わせ</button></div>` +
+    `<p class="getres" aria-live="polite"></p>`;
+  det.hidden = false;
+  det.querySelectorAll(".chip").forEach((c) => c.onclick = () => {
+    state.range[node] = parseInt(c.dataset.h, 10);
+    det.querySelectorAll(".chip").forEach((x) => x.setAttribute("aria-pressed", String(x === c)));
+    loadHistory(node);
+  });
+  det.querySelector('[data-act="get"]').onclick = async (e) => {
+    const out = det.querySelector(".getres");
+    out.textContent = "問い合わせ中…";
+    const r = await command("get", { node }, e.currentTarget);
+    if (!r) { out.textContent = ""; return; }
+    const [cls, icon, label] = STATUS[r.status] || ["none", "–", r.status];
+    let s = `<span class="ico ${cls}" aria-hidden="true">${icon}</span> ${esc(label)}`;
+    if (r.dist_cm != null) s += `、<b>${cm(r.dist_cm)} cm</b>`;
+    if (r.n_try != null) s += `(${r.n_ok}/${r.n_try} 有効`;
+    if (r.min_us != null) s += `、${cm(usToCm(r.min_us))}〜${cm(usToCm(r.max_us))} cm`;
+    if (r.n_try != null) s += `)`;
+    if (r.rtt_ms != null) s += `、応答 ${r.rtt_ms} ms`;
+    if (r.tx_status) s += `、配送コード ${esc(txText(r.tx_status))}`;
+    out.innerHTML = `${hms(Date.now() / 1000)} ${s}<br><small style="color:var(--ink-3)">記録には残りません</small>`;
+  };
+  const n = state.ov.nodes.find((x) => x.node === node);
+  if (n) renderDetailFacts(n);
+  loadHistory(node);
+}
+
+function renderDetailFacts(n) {
+  const li = $("nodes").querySelector(`li[data-node="${n.node}"]`);
+  const f = li && li.querySelector(".facts");
+  if (!f) return;
+  const last = n.last || {};
+  const items = [
+    ["最後の正常値", n.last_ok_ts ? `${cm(n.last_ok_dist)} cm(${when(n.last_ok_ts)})` : "なし"],
+    ["連続失敗", `${n.fails}回`],
+  ];
+  if (last.tx_status) items.push(["配送コード", txText(last.tx_status)]);
+  if (last.rtt_ms != null) items.push(["応答時間", `${last.rtt_ms} ms`]);
+  if (last.child_uptime_s != null) items.push(["子機の稼働", dur(last.child_uptime_s)]);
+  if (last.fw) items.push(["FW", last.fw]);
+  f.innerHTML = items.map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");
+}
+
+async function loadHistory(node) {
+  const hours = state.range[node];
+  try {
+    const d = await api(`/api/history?node=${node}&hours=${hours}`);
+    state.hist[node] = d;
+    drawChart(node);
+  } catch (e) {
+    const li = $("nodes").querySelector(`li[data-node="${node}"]`);
+    if (li) li.querySelector(".chart svg").innerHTML = `<text class="empty" x="50%" y="50%" text-anchor="middle">${esc(e.message)}</text>`;
+  }
+}
+
+// ---------- chart
+function niceStep(range, target) {
+  const raw = range / target, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const m = raw / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+}
+function drawChart(node) {
+  const li = $("nodes").querySelector(`li[data-node="${node}"]`);
+  const d = state.hist[node];
+  if (!li || !d) return;
+  const svg = li.querySelector(".chart svg"), tip = li.querySelector(".tip");
+  const W = svg.clientWidth || 600, H = 200;
+  const L = 40, R = 10, T = 10, B = 24, pw = W - L - R, ph = H - T - B;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const now = Date.now() / 1000, t0 = now - d.hours * 3600;
+  const rows = d.rows.map((r) => ({ ts: r[0], st: r[1], dist: r[2], lo: usToCm(r[3]), hi: usToCm(r[4]), nok: r[5], ntry: r[6] }));
+  const oks = rows.filter((r) => isOk(r.st) && r.dist != null);
+  svg.setAttribute("aria-label", `ノード${node}の距離の推移。${oks.length}件の正常値、${rows.length - oks.length}件の失敗`);
+  if (!rows.length) {
+    svg.innerHTML = `<text class="empty" x="${W / 2}" y="${H / 2}" text-anchor="middle">この期間の記録はありません</text>`;
+    return;
+  }
+  let lo = Infinity, hi = -Infinity;
+  for (const r of oks) {
+    lo = Math.min(lo, r.lo != null ? r.lo : r.dist, r.dist);
+    hi = Math.max(hi, r.hi != null ? r.hi : r.dist, r.dist);
+  }
+  if (!oks.length) { lo = 0; hi = GAUGE_MAX; }
+  if (hi - lo < 4) { const c = (hi + lo) / 2; lo = c - 2; hi = c + 2; }
+  const padv = (hi - lo) * 0.08; lo = Math.max(0, lo - padv); hi += padv;
+  const x = (ts) => L + (ts - t0) / (now - t0) * pw;
+  const y = (v) => T + (v - lo) / (hi - lo) * ph;   // 小さい距離(=高い水位)が上
+
+  let g = "";
+  const ys = niceStep(hi - lo, 4);
+  for (let v = Math.ceil(lo / ys) * ys; v <= hi; v += ys) {
+    g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>` +
+         `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${+v.toFixed(1)}</text>`;
+  }
+  const xs = d.hours <= 1 ? 900 : d.hours <= 6 ? 3600 : d.hours <= 24 ? 4 * 3600 : 86400;
+  const tz = new Date().getTimezoneOffset() * 60;
+  for (let t = Math.ceil((t0 - tz) / xs) * xs + tz; t <= now; t += xs) {
+    g += `<text x="${x(t)}" y="${H - 6}" text-anchor="middle">${xs >= 86400 ? md(t) : hm(t)}</text>`;
+  }
+
+  // 線と帯: 失敗や長い空白で切る
+  const dts = [];
+  for (let i = 1; i < oks.length; i++) dts.push(oks[i].ts - oks[i - 1].ts);
+  dts.sort((a, b) => a - b);
+  const gapMax = dts.length ? dts[Math.floor(dts.length / 2)] * 2.5 : Infinity;
+  const segs = []; let cur = [];
+  let prevTs = null;
+  for (const r of rows) {
+    if (!isOk(r.st) || r.dist == null) { if (cur.length) segs.push(cur); cur = []; prevTs = null; continue; }
+    if (prevTs != null && r.ts - prevTs > gapMax) { segs.push(cur); cur = []; }
+    cur.push(r); prevTs = r.ts;
+  }
+  if (cur.length) segs.push(cur);
+  let band = "", line = "", pts = "";
+  for (const s of segs) {
+    const bs = s.filter((r) => r.lo != null);
+    if (bs.length > 1) {
+      band += `<path class="band" d="M${bs.map((r) => `${x(r.ts)},${y(r.lo)}`).join("L")}L${bs.slice().reverse().map((r) => `${x(r.ts)},${y(r.hi)}`).join("L")}Z"/>`;
+    }
+    if (s.length > 1) line += `<path class="line" d="M${s.map((r) => `${x(r.ts)},${y(r.dist)}`).join("L")}"/>`;
+    if (s.length === 1 || oks.length <= 48) pts += s.map((r) => `<circle class="pt" cx="${x(r.ts)}" cy="${y(r.dist)}" r="4"/>`).join("");
+  }
+  const fails = rows.filter((r) => !isOk(r.st)).map((r) =>
+    `<line class="fail" x1="${x(r.ts)}" x2="${x(r.ts)}" y1="${T + ph - 7}" y2="${T + ph}"/>`).join("");
+  svg.innerHTML = `<g class="axis">${g}</g>${band}${line}${pts}${fails}` +
+    `<line class="cross" id="cross-${node}" y1="${T}" y2="${T + ph}" visibility="hidden"/>` +
+    `<rect x="${L}" y="0" width="${pw}" height="${H}" fill="transparent" class="hit"/>`;
+
+  const cross = svg.querySelector(".cross"), hit = svg.querySelector(".hit");
+  const move = (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const px = (ev.clientX - rect.left) * (W / rect.width);
+    const ts = t0 + (px - L) / pw * (now - t0);
+    let best = null, bd = Infinity;
+    for (const r of rows) { const dd = Math.abs(r.ts - ts); if (dd < bd) { bd = dd; best = r; } }
+    if (!best || Math.abs(x(best.ts) - px) > 40) { cross.setAttribute("visibility", "hidden"); tip.hidden = true; return; }
+    cross.setAttribute("x1", x(best.ts)); cross.setAttribute("x2", x(best.ts)); cross.setAttribute("visibility", "visible");
+    const lbl = (STATUS[best.st] || [0, 0, best.st])[2];
+    tip.innerHTML = `${d.hours > 24 ? md(best.ts) + " " : ""}${hm(best.ts)} ${esc(lbl)}` +
+      (best.dist != null && isOk(best.st) ? `<br><b>${cm(best.dist)} cm</b>` +
+        (best.lo != null ? `(${cm(best.lo)}〜${cm(best.hi)}、${best.nok}/${best.ntry})` : "") : "");
+    tip.hidden = false;
+    const tx = x(best.ts) / W * rect.width;
+    tip.style.left = Math.min(Math.max(tx - tip.offsetWidth / 2, 4), rect.width - tip.offsetWidth - 4) + "px";
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerdown", move);
+  hit.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); tip.hidden = true; });
+}
+
+// ---------- parent health
+function renderParent() {
+  const ov = state.ov, svc = ov.service, h = ov.health[0];
+  const cyc = ov.health.slice().reverse();
+  $("cycles").innerHTML = cyc.map((c) => {
+    const r = c.n_nodes ? c.n_ok / c.n_nodes : 0;
+    const cls = r >= 1 ? "" : r > 0 ? "part" : "none";
+    return `<i class="${cls}" style="height:${Math.max(6, r * 100)}%" title="${when(c.ts)} ${c.n_ok}/${c.n_nodes}"></i>`;
+  }).join("");
+  $("cycles-cap").textContent = cyc.length ? `直近${cyc.length}回の計測で応答したノードの割合(左が古い)` : "";
+  const kv = [];
+  if (h) {
+    kv.push(["記録時刻", when(h.ts)]);
+    if (h.batt_v != null) kv.push(["バッテリー", `${h.batt_v.toFixed(2)} V`]);
+    if (h.modem_sig != null) kv.push(["電波品質", `${h.modem_sig} %`]);
+    if (h.cpu_temp != null) kv.push(["CPU 温度", `${h.cpu_temp.toFixed(1)} ℃`]);
+    if (h.disk_free_mb != null) kv.push(["ディスク空き", `${(h.disk_free_mb / 1024).toFixed(1)} GB`]);
+    if (h.uptime_s != null) kv.push(["稼働時間", dur(h.uptime_s)]);
+    if (h.cycle_ms != null) kv.push(["1サイクルの所要", `${(h.cycle_ms / 1000).toFixed(1)} 秒`]);
+  }
+  if (svc) {
+    kv.push(["時計の同期", svc.clock_synced ? "済み" : svc.clock_synced === false ? "未同期" : "不明"]);
+    kv.push(["親機 XBee", svc.radio_open ? (svc.local_mac || "接続中") : "開けていません"]);
+    kv.push(["送信", svc.upload_error
+      ? `${svc.upload_error_since ? when(svc.upload_error_since) + "から" : ""}失敗中: ${svc.upload_error}`
+      : `最終成功 ${when(svc.upload_last_ok)}`]);
+    kv.push(["バージョン", svc.version]);
+  }
+  $("kv").innerHTML = kv.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("");
+}
+
+// ---------- loop
+async function refresh() {
+  try {
+    state.ov = await api("/api/overview");
+  } catch (e) {
+    $("svc").className = "svc ng"; $("svc-text").textContent = "親機に接続できません";
+    return;
+  }
+  render();
+  const lc = state.ov.service && state.ov.service.last_cycle && state.ov.service.last_cycle.cycle_ts;
+  if (lc && lc !== state.lastCycle) {
+    if (state.lastCycle != null) state.open.forEach((n) => loadHistory(n));
+    state.lastCycle = lc;
+  }
+}
+$("btn-poll").onclick = async (e) => {
+  const r = await command("poll", {}, e.currentTarget);
+  if (r) {
+    const v = Object.values(r);
+    toast(`全ノードを計測しました。${v.filter(isOk).length}/${v.length} が応答`);
+    state.open.forEach((n) => loadHistory(n));
+  }
+};
+$("btn-flush").onclick = async (e) => {
+  const r = await command("flush", {}, e.currentTarget);
+  if (r) toast("未送信データの送信を始めました");
+};
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => state.open.forEach((n) => drawChart(n)), 150);
+});
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+setInterval(() => { if (!document.hidden) refresh(); }, 10000);
+refresh();
+</script>
+</body>
+</html>

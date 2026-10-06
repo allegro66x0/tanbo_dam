@@ -1,0 +1,22 @@
+[Unit]
+Description=Tanbo dam coordinator web console
+After=network-online.target tanbo-parent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tanbo
+Group=tanbo
+ExecStart=/opt/tanbo/venv/bin/python -m tanbo.web -c /etc/tanbo/parent.toml
+WorkingDirectory=/opt/tanbo
+# RuntimeDirectory は付けない(止めたときに /run/tanbo ごと消え、計測サービスの制御ソケットが消えるため)
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

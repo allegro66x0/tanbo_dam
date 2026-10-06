@@ -6,7 +6,7 @@
 child/tanbo_child_v2/   子機ファームウェア(全子機同一)
 parent/                 親機サービス(Python パッケージ tanbo)
   config/parent.example.toml
-  systemd/tanbo-parent.service
+  systemd/tanbo-parent.service, tanbo-web.service
   tests/                実 digi-xbee + XBee エミュレータでの結合テスト
 gas/                    受信用 Apps Script(新スプレッドシートにバインド)
 docs/PROTOCOL.md
@@ -17,13 +17,15 @@ docs/PROTOCOL.md
 ```
 子機 ──REQ,<seq> / D2 応答── 親機 XBee ── poller ──▶ SQLite(/var/lib/tanbo) ── uploader ──POST──▶ GAS ──▶ data_YYYY-MM
                                                │                                               health_YYYY-MM / 最新 / 親機
-                                               └─ tanboctl(unix ソケット)
+                                               └─ 制御ソケット ── tanboctl(SSH)
+                                                               └─ tanbo-web ◀── スマホ(Tailscale)
 ```
 
 - 計測は壁時計に揃った周期(通常 10 分 → 毎時 00,10,20… 分)。設置チェック時だけ `tanboctl check` で一時的に 1 分周期にでき、期限が来ると自動で戻る
 - 計測結果は必ず先に SQLite に書く。回線が切れても欠測にはならず、復旧後にまとめて送られる
 - GAS は (db_uuid, 種別) ごとの高水位線で重複を弾く。再送しても二重記録にならない
 - サイクルごとに親機自身の状態(健全性)も1行記録する。全子機が沈黙していても親機の生死が分かる
+- 親機の操作は、親機上の操作画面(tanbo-web)をスマホから Tailscale 経由で開いて行う。GAS / スプレッドシートからは操作しない(GAS は受信専用)
 
 ## 1. GAS(先にやる)
 
@@ -64,15 +66,29 @@ sudo cp /opt/tanbo/config/parent.example.toml /etc/tanbo/parent.toml
 sudo chmod 640 /etc/tanbo/parent.toml && sudo chgrp tanbo /etc/tanbo/parent.toml
 sudoedit /etc/tanbo/parent.toml      # port, url, token を設定
 sudo ln -s /opt/tanbo/venv/bin/tanboctl /usr/local/bin/tanboctl
-sudo cp /opt/tanbo/systemd/tanbo-parent.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now tanbo-parent
+sudo cp /opt/tanbo/systemd/tanbo-parent.service /opt/tanbo/systemd/tanbo-web.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now tanbo-parent tanbo-web
 ```
 
 `port` は `ls -l /dev/serial/by-id/` で親機 XBee の FTDI を確認して設定する。`/dev/ttyUSB0` はモバイル通信モジュールと番号が入れ替わることがある。
 
 旧サービス(旧 main.py 等)が同じシリアルポートを掴んでいると開けないので、先に止めて無効化しておく。
 
-### 操作
+### 操作画面(スマホから)
+
+親機と同じ tailnet に入ったスマホで `http://<親機の Tailscale 名>:8080/` を開く(MagicDNS が無効なら `http://100.x.y.z:8080/`)。ホーム画面に追加しておくと現地で開きやすい。
+
+- 上部: 運用モード。「設置チェックを始める」で一時的に 1 分周期(30分〜6時間、期限が来ると自動で 10 分周期に戻る)。「全ノードを今すぐ計測」「未送信を今すぐ送る」
+- ノード一覧: 最新の状態と距離。左のゲージはセンサー(上端)から水面までの距離を 0〜100 cm で示す。失敗中のノードは連続失敗回数、配送コード、最後の正常値(薄く表示)
+- ノードをタップ: 1時間〜7日の推移グラフ(上ほど水位が高い。帯は1回の計測内のばらつき、下の赤い印は失敗)と「このノードに今すぐ問い合わせ」(記録には残らない。設置・調整中の確認用)
+- 親機の状態: 直近の計測ごとの応答率、温度、ディスク、時計の同期、送信の状況
+- 10 秒ごとに自動更新。計測サービスが止まっていても、記録済みのデータは表示される
+
+アクセス制限: `[web] allow_interfaces`(既定 `lo`, `tailscale0`)に届いた接続しか受け付けないので、Wi-Fi・LTE・USB 通信端末の側からは開けない。tailnet に入れる端末は全部操作できるので、tailnet は自分の端末だけにしておく。
+
+HTTPS にしたい場合は、`bind = "127.0.0.1"` にして `sudo tailscale serve --bg 8080` で `https://<親機>.<tailnet>.ts.net/` から開く。
+
+### 操作(SSH から)
 
 ```bash
 tanboctl status          # 周期、次回時刻、各ノードの最新値、未送信件数
@@ -83,6 +99,7 @@ tanboctl get 5           # ノード 5 に今すぐ1回問い合わせ(記録し
 tanboctl poll            # 全ノードを今すぐ計測(記録する)
 tanboctl flush           # 未送信を今すぐ送る
 journalctl -u tanbo-parent -f
+journalctl -u tanbo-web -f
 ```
 
 `tanboctl` は `/run/tanbo/ctl.sock` を使うので、`sudo` か tanbo グループで実行する。周期の一時変更はサービスを再起動すると通常周期に戻る(戻し忘れ防止)。
@@ -119,7 +136,7 @@ sudo tanboctl status                       # ノードごとの status / tx(配�
 | `NET` | 回線・DNS・接続先。相手に届いていない(例 `NET: ConnectionRefusedError: [Errno 111] Connection refused`) |
 | `TIMEOUT` | 接続(`connect`)または応答(`read`)の時間切れ |
 | `HTTP` | HTTP ステータスが 4xx / 5xx(URL 違い、デプロイ削除など) |
-| `RESP` | JSON でない応答。ウェブアプリのアクセスが「全員」でないとログイン画面が返る |
+| `RESP` | 想定外の応答。JSON でない(ウェブアプリのアクセスが「全員」でないとログイン画面が返る)、`hwm` がない(doPost が実行されず doGet の応答が返った)など。括弧内はたどったリダイレクトの経路 |
 | `GAS` | GAS が受理しなかった(`GAS: bad token` など) |
 | `ERR` | その他 |
 
@@ -127,7 +144,8 @@ sudo tanboctl status                       # ノードごとの status / tx(配�
 
 - サービスが落ちたら 20 秒後に再起動(回数制限なし)
 - 計測ループか送信ループが 5 分止まると systemd のウォッチドッグが再起動
-- XBee が開けない状態が 30 分続くとプロセスを終了して再起動
+- XBee が開けない状態が 30 分続くとプロセスを終了して再起動。ただし XBee が抜けている(`port` のパスがない)ときは再起動しても直らないので、再起動せず 30 秒ごとに開き直しを試みる(挿せば自動で再開)
+- GAS へのリダイレクトは自前でたどり、結果ページ(`/macros/echo`)以外への転送は POST のまま送り直す(requests 任せだと GET に変わって doGet が走る)
 - 送信失敗は 30 秒〜15 分の指数バックオフで再送
 - 起動直後に NTP 同期で時計が大きく進んだ場合、古い時刻の枠では計測しない。各行に `ClockSynced` と `boot_id` を残すので、後から時刻を検証できる
 
@@ -160,7 +178,8 @@ SD カード保護: `raspi-config` の overlayfs でルートを読み取り専�
 ## 5. テスト
 
 ```bash
-cd parent && python3 -m pytest -q tests     # 実 digi-xbee + pty XBee エミュレータ + 偽 GAS
+cd parent && python3 -m pytest -q tests     # 実 digi-xbee + pty XBee エミュレータ + 偽 GAS + 操作画面 API
+python3 parent/tests/demo_web.py 8099       # 合成データで操作画面を起動(見た目の確認用)
 node gas/test_gas.js                        # Code.gs を Apps Script モック上で
 ```
 

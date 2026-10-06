@@ -14,6 +14,9 @@
 - プロトコル(子機↔親機)や GAS に送る列を変えるときは、`docs/PROTOCOL.md`・`gas/Code.gs`・テストを同時に直す
 - テスト(`parent/tests`)は常に通る状態を保つ。直したら `python -m pytest -q parent/tests`
 - 調べたこと・やったこと・判断に迷ったことは `docs/pi_notes.md` に日付付きで追記する(チャット側の Claude がここを読んで続きを考える)
+- **このリポジトリは公開されている**。pi_notes やコミットに、IP アドレス、ホスト名、SSH の接続先、
+  SIM/モデムの識別番号(ICCID・IMEI・電話番号)、GAS の URL・TOKEN を書かない。必要なら「モデム: USB 接続、ttyUSB 4本」程度にぼかす
+- Pi からの push は認証が未設定なら失敗する。その場合はコミットまでにして、pi_notes の内容をユーザーに表示する
 - コミットは小さく、メッセージに何を確かめたかを書く
 
 ## Phase 0: 現状調査(何も変更しない)
@@ -26,6 +29,8 @@
 - 親機 XBee のシリアル: `ls -l /dev/serial/by-id/`、どのプロセスが掴んでいるか(`fuser` / `lsof`)
 - モバイル通信モジュール: `lsusb`、`ip a`、`mmcli -L`(ModemManager 管理下か)。`/dev/ttyUSB*` を何本生やしているか
 - 時刻同期: `timedatectl`(timesyncd か chrony か)
+- 旧親機の操作アプリ(スマホから Tailscale で開いていたもの)の所在、ポート、起動方法、機能。v2 の操作画面に足りない機能があれば pi_notes に列挙する
+- Tailscale: `tailscale status`、この Pi の tailnet 上の名前(pi_notes には書かない)
 - I2C: `/dev/i2c-1` の有無、`i2cdetect -y 1`(i2c-tools があれば)
 - ストレージ: `lsblk`、`df -h`、overlayfs の状態(`raspi-config nonint get_overlay_now` など)
 - ユーザーとグループ: `dialout`・`i2c` グループの存在
@@ -67,7 +72,10 @@ README の「2. 親機 / インストール」に沿って `/opt/tanbo` へ入�
   - `tanboctl status` で次回時刻が 10 分境界、未送信件数が減っていく
   - tambo_data2 に `data_YYYY-MM` / `health_YYYY-MM` が増える(ユーザーに見てもらう)
   - `sudo systemctl kill -s SIGSTOP tanbo-parent` で止めると WatchdogSec(300 秒)後に再起動される
-- 旧プログラムの無効化はこの段階で、ユーザーの確認を取ってから
+- 操作画面: `tanbo-web` も有効にする。Tailscale が入っているか(`tailscale status`)を確認し、
+  スマホから `http://<親機の Tailscale 名>:8080/` が開けること、ノードをタップしてグラフが出ること、
+  「このノードに今すぐ問い合わせ」が返ることをユーザーに確認してもらう。旧親機の操作アプリが同じポートを使っていたら止めてよいか確認する
+- 旧プログラム(旧操作アプリを含む)の無効化はこの段階で、ユーザーの確認を取ってから
 
 ## Phase 4: 堅牢化(提案だけ。実施はユーザーと相談)
 

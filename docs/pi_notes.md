@@ -458,3 +458,40 @@ python -m pytest -q tests    # 7 passed in 37.75s
 
 - GitHub への push(ローカル `main` が origin より 7 コミット先)
 - `test_service_and_ctl` の偶発的な失敗の原因、Phase 4 の提案、子機の v2 ファーム入れ替え
+
+## 2026-10-06 チャット側からの変更(Pi への導入待ち)
+
+PC 側の Claude が入れた変更。**この Pi にはまだ入っていない**。テストは 18 件すべて成功(クラウド上、実機未確認)。
+
+### 内容
+
+1. **操作画面 `tanbo-web` を追加**(`parent/tanbo/web.py`、`parent/tanbo/static/index.html`、`parent/systemd/tanbo-web.service`)
+   - 旧親機と同じく、スマホから Tailscale 経由で `http://<親機の Tailscale 名>:8080/` を開いて操作する。GAS からの操作はしない
+   - 計測サービスとは別プロセス。SQLite を読み取り専用で開き、操作は制御ソケット経由(tanboctl と同じ口)。標準ライブラリのみ
+   - `[web] allow_interfaces = ["lo", "tailscale0"]` に届いた接続だけ受け付ける(Wi-Fi・USB 通信端末側からは 403)
+   - `store.py` に索引 2 つ(`(node, id)`、`(node, ts)`)を追加。`tanbo-parent` の再起動時に作られる
+2. **`KeyError: 'hwm'` / 404 への対処(仮説に基づく)**
+   - 仮説: GAS の `/exec` の手前で script.google.com 内の 302 転送が挟まると、requests が POST を GET に変えて
+     `/exec` の doGet が走る → `{ok, version}` が返り `hwm` がない。プロセス再起動直後(Cookie のない新しいセッション)に多い点と合う
+   - `uploader._request_gas` でリダイレクトを自前でたどる。結果ページ(`/macros/echo`、googleusercontent)だけ GET、それ以外は POST のまま送り直す
+   - `hwm` がない応答は `RESP: 応答に hwm がない (<経路>)` に分類。経路(例 `script.google.com→302:script.googleusercontent.com/echo`)が
+     `UploadErr` に残るので、再発したらそれを見れば仮説の当否が分かる
+3. **XBee が抜けているときは 30 分ごとの再起動をしない**
+   - `port` のパスが存在しないときは fatal にせず、30 秒ごとに開き直しを試みる(挿せば自動で再開)。WARNING は 30 分に 1 回
+   - デバイスはあるのに使えない場合は従来どおり 30 分で再起動
+4. `test_service_and_ctl` の偶発的失敗: 送信待ちを 10 秒 → 30 秒にし、送信スレッドを起こしてから待つようにした(原因の推定は前回のとおり)
+
+### この Pi でやること(sudo が要る)
+
+```bash
+cd ~/tanbo_dam && git pull
+cd parent && . .venv/bin/activate && pip install -e . && python -m pytest -q tests && deactivate
+sudo cp -r ~/tanbo_dam/parent/* /opt/tanbo/ && sudo /opt/tanbo/venv/bin/pip install /opt/tanbo
+sudo cp /opt/tanbo/systemd/tanbo-web.service /etc/systemd/system/
+sudoedit /etc/tanbo/parent.toml       # 末尾近くに [web] を追加(parent.example.toml の [web] をそのまま)
+sudo systemctl daemon-reload && sudo systemctl restart tanbo-parent && sudo systemctl enable --now tanbo-web
+```
+
+- 確認: `systemctl status tanbo-web`、スマホ(tailnet 内)から `http://<Tailscale 名>:8080/` が開く、
+  Wi-Fi 側の IP:8080 では 403 になる(`curl -i http://<wlan0 の IP>:8080/`)
+- `[web]` を書かなくても既定値(0.0.0.0:8080、lo と tailscale0 のみ)で動く

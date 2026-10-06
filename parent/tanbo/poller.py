@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import queue
 import threading
 import time
@@ -118,6 +119,7 @@ class Poller(threading.Thread):
         self._seq = int(time.time()) & 0xFFFF
         self._radio_bad_since: Optional[float] = None
         self._radio_retry_at = 0.0
+        self._absent_logged_at = -1e9
         self._unknown_mac_logged: dict[str, float] = {}
         self._self_node_logged: set[int] = set()
         self._last_fails = ""
@@ -149,7 +151,15 @@ class Poller(threading.Thread):
         except Exception:
             pass
         if now - self._radio_bad_since > RADIO_FATAL_AFTER_S:
-            self.fatal = f"XBee unavailable for >{RADIO_FATAL_AFTER_S}s"
+            if os.path.exists(self.cfg.xbee.port):
+                # デバイスはあるのに使えない → プロセスごと作り直すと直ることがある
+                self.fatal = f"XBee unavailable for >{RADIO_FATAL_AFTER_S}s"
+            else:
+                # 抜けているだけ。再起動しても直らないので、挿されるのを 30 秒ごとに待つ
+                if now - self._absent_logged_at > RADIO_FATAL_AFTER_S:
+                    log.warning("XBee が接続されていません (%s がない)。挿されたら自動で再開します",
+                                self.cfg.xbee.port)
+                    self._absent_logged_at = now
 
     def _drain_events(self) -> None:
         while True:

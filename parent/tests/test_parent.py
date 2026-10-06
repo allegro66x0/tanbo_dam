@@ -40,14 +40,46 @@ class FakeGas:
         self.hwm: dict[tuple[str, str], int] = {}
         self.fail_next = 0
         self.requests = []
+        # direct: POST にそのまま JSON を返す
+        # echo:   本物の GAS と同じく POST /exec → 302 → GET /macros/echo で結果
+        # hop:    その前に /exec → /exec2 の転送が1回挟まる(requests 任せだと GET /exec2 = doGet になる)
+        self.mode = "direct"
+        self._echo: dict[str, bytes] = {}
         gas = self
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
+            def _send_json(self, data: bytes):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def _redirect(self, loc: str):
+                self.send_response(302)
+                self.send_header("Location", loc)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_GET(self):
+                if self.path.startswith("/macros/echo?k="):
+                    data = gas._echo.pop(self.path.split("=", 1)[1], None)
+                    if data is None:
+                        self.send_response(404)
+                        self.end_headers()
+                        return
+                    self._send_json(data)
+                else:   # doGet
+                    self._send_json(json.dumps({"ok": True, "version": "fake"}).encode())
+
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if gas.mode == "hop" and self.path == "/exec":
+                    self._redirect("/exec2")
+                    return
                 gas.requests.append(body)
                 if gas.fail_next:
                     gas.fail_next -= 1
@@ -66,11 +98,12 @@ class FakeGas:
                     gas.hwm[key] = h
                     out = {"ok": True, "hwm": h, "added": len(new)}
                 data = json.dumps(out).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                if gas.mode in ("echo", "hop"):
+                    k = str(len(gas.requests))
+                    gas._echo[k] = data
+                    self._redirect(f"/macros/echo?k={k}")
+                    return
+                self._send_json(data)
 
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.url = f"http://127.0.0.1:{self.srv.server_port}/exec"
@@ -282,6 +315,56 @@ def test_radio_loss_and_recovery(env):
     app.radio.close()
 
 
+@pytest.mark.parametrize("mode", ["echo", "hop"])
+def test_upload_follows_gas_redirects(env, mode):
+    tmp, gas, emu, cfg, _ = env
+    gas.mode = mode
+    app = App(cfg)
+    app.poller.run_cycle(time.time())
+    assert app.uploader.upload_once() == 7 + 1
+    assert len(gas.rows["m"]) == 7 and len(gas.rows["h"]) == 1
+    app.radio.close()
+
+
+def test_missing_hwm_is_classified(env):
+    # doGet の応答が返ってきた場合(KeyError ではなく RESP に分類)
+    tmp, gas, emu, cfg, _ = env
+    cfg.upload.url = cfg.upload.url.replace("/exec", "/exec?x")
+    app = App(cfg)
+    app.poller.run_cycle(time.time())
+    orig = app.uploader._request_gas
+
+    def as_get(body):
+        r, _ = orig(body)
+        return app.uploader._session.get(cfg.upload.url, timeout=5), "test"
+    app.uploader._request_gas = as_get
+    with pytest.raises(UploadRejected) as ei:
+        app.uploader.upload_once()
+    assert describe_error(ei.value).startswith("RESP: 応答に hwm がない")
+    app.radio.close()
+
+
+def test_unplugged_xbee_does_not_restart(env, monkeypatch):
+    tmp, gas, emu, cfg, _ = env
+    import tanbo.poller as poller_mod
+    monkeypatch.setattr(poller_mod, "RADIO_FATAL_AFTER_S", 0)
+    app = App(cfg)
+    emu.dead = True
+    # デバイスはあるが応答しない → 再起動を要求
+    app.poller.run_cycle(time.time())
+    app.poller._radio_retry_at = 0
+    app.poller.run_cycle(time.time())
+    assert app.poller.fatal
+    # 抜けている(ポートのパスがない)→ 再起動しても直らないので要求しない
+    app.poller.fatal = None
+    cfg.xbee.port = os.path.join(tmp, "no-such-port")
+    app.radio.port = cfg.xbee.port
+    app.poller._radio_retry_at = 0
+    res = app.poller.run_cycle(time.time())
+    assert all(r.status == "RADIO_ERR" for r in res)
+    assert app.poller.fatal is None
+
+
 def test_service_and_ctl(env):
     tmp, gas, emu, cfg, _ = env
     app = App(cfg)
@@ -321,7 +404,8 @@ def test_service_and_ctl(env):
     s = call(sock, "status")
     assert s["last_cycle"]["n_nodes"] == 7
     assert [x["status"] for x in s["latest"]][:2] == ["OK", "OK_V1"]
-    deadline = time.time() + 10
+    app.uploader.wake.set()
+    deadline = time.time() + 30
     while time.time() < deadline and len(gas.rows["m"]) < 14:
         time.sleep(0.3)
     assert len(gas.rows["m"]) >= 14
