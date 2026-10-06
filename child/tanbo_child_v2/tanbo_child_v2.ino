@@ -33,12 +33,12 @@ const long MIN_VALID_US = 290;    // 約 5cm 未満は近距離の残響とし�
 const long MAX_VALID_US = 11650;  // 約 2m 超は管外・多重反射として捨てる
 
 // ---- 受信 ---------------------------------------------------------------------
-const unsigned long LINE_IDLE_MS = 50;  // 改行なしでもこの時間無通信なら1行とみなす(旧親機互換)
-const size_t LINE_MAX = 64;
+const unsigned long LINE_IDLE_MS = 50;  
+const size_t RX_LINE_MAX = 64;
 // 親機からの REQ がこの時間途絶えたら自分を再起動(UART 固着などへの保険)
 const unsigned long NO_REQ_RESTART_MS = 6UL * 3600UL * 1000UL;
 
-char line_buf[LINE_MAX + 1];
+char line_buf[RX_LINE_MAX + 1];
 size_t line_len = 0;
 unsigned long last_rx_ms = 0;
 unsigned long last_req_ms = 0;
@@ -135,7 +135,7 @@ void poll_serial() {
     last_rx_ms = millis();
     if (c == '\n') {
       handle_line();
-    } else if (line_len < LINE_MAX) {
+    } else if (line_len < RX_LINE_MAX) {
       line_buf[line_len++] = (char)c;
     } else {
       line_len = 0;   // 長すぎる行は捨てる
