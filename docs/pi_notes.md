@@ -495,3 +495,9 @@ sudo systemctl daemon-reload && sudo systemctl restart tanbo-parent && sudo syst
 - 確認: `systemctl status tanbo-web`、スマホ(tailnet 内)から `http://<Tailscale 名>:8080/` が開く、
   Wi-Fi 側の IP:8080 では 403 になる(`curl -i http://<wlan0 の IP>:8080/`)
 - `[web]` を書かなくても既定値(0.0.0.0:8080、lo と tailscale0 のみ)で動く
+
+## 2026-10-06 ユーザーからの回答(3)
+
+- 操作画面(tanbo-web)を導入し、スマホから Tailscale 経由で開けることをユーザーが確認した
+- **ネットワークの優先順位は今のまま**(USB 通信端末が Wi-Fi より優先)。設置場所では USB 通信端末だけで通信するため。
+  研究室で端末の名前解決が失敗している間に送信が止まるのは許容(未送信は SQLite に残り、つながれば送られる)
