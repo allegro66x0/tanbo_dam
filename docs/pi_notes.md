@@ -519,3 +519,12 @@ sudo systemctl daemon-reload && sudo systemctl restart tanbo-parent && sudo syst
 - 10-06 に 0 µs だったエコーは取れるようになっていた(配線は直った模様)
 - 17:15 の再起動から稼働。手動問い合わせ OK 7/7(38.9 cm、rtt 0.4 s)、17:20 の定期計測で記録・GAS 送信まで確認(この回はセンサの向きのためか NO_ECHO)
 - GAS の説明シートの `PORT_ERR` の行は、次の GAS 再デプロイで反映される(動作には影響なし)
+
+## 2026-10-08 親機の地点のセンサの抜き差しでサイクルごと落ちる不具合(チャット側 Claude)
+
+- 17:47:59 に ESP32 の USB が抜け、17:49 に挿し直されて ttyUSB1 → ttyUSB2 に変わった。サービスは古いポートを開いたままで、
+  送るたびに `termios.error: (5, 'Input/output error')`(`reset_input_buffer` の tcflush)
+- `termios.error` は OSError の仲間ではなく `local.py` で拾えていなかったため、`run_cycle` ごと例外で落ち、
+  **17:40 を最後に XBee の子機も含めて何も記録されなかった**(設置チェックの 1 分周期でも値が出ない、として気づいた)
+- 修正: `local.py` で `termios.error` も拾って PORT_ERR → 閉じて次のサイクルで開き直す(by-id のパスは同じなので戻る)。
+  `poller` は親機の地点のセンサの想定外の例外でも PORT_ERR を 1 行記録し、XBee の子機の結果は残す。回帰テスト 2 件、計 28 件成功

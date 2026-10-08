@@ -518,3 +518,39 @@ def test_local_node_must_not_overlap(env):
     with pytest.raises(config_mod.ConfigError, match="重なって"):
         make_cfg(tmp, emu.port, gas.url, {0: MACS[0]},
                  extra='[local]\nport = "/dev/null"\nnode = 0\n')
+
+
+def test_local_sensor_io_error_recovers(env, usb):
+    # 実機: USB が抜けて挿し直されたあと、開いたままの古いポートへの tcflush が termios.error(EIO)。
+    # OSError の仲間ではないので取りこぼし、サイクルごと落ちていた
+    import termios
+    dev = usb("v2")
+    app = App(local_cfg(env, dev.port))
+    app.radio.open()
+    assert app.poller.poll_local().status == "OK"
+
+    def eio():
+        raise termios.error(5, "Input/output error")
+    app.local._ser.reset_input_buffer = eio
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    assert res[LOCAL_NODE].status == "PORT_ERR"
+    assert "Input/output error" in res[LOCAL_NODE].row["raw"]
+    assert res[0].status == "OK"   # XBee の子機は記録される
+    assert not app.local.is_open   # 閉じておき、次のサイクルで開き直す
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    assert res[LOCAL_NODE].status == "OK" and app.poller.local_error is None
+    app.radio.close()
+    app.local.close()
+
+
+def test_local_sensor_unexpected_error_keeps_xbee_rows(env, usb, monkeypatch):
+    dev = usb("v2")
+    app = App(local_cfg(env, dev.port))
+    app.radio.open()
+    monkeypatch.setattr(app.poller, "poll_local", lambda: 1 / 0)
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    assert res[LOCAL_NODE].status == "PORT_ERR"
+    assert "ZeroDivisionError" in res[LOCAL_NODE].row["raw"]
+    assert res[0].status == "OK"
+    assert app.store.unsent_count("m") == 8
+    app.radio.close()

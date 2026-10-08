@@ -365,7 +365,17 @@ class Poller(threading.Thread):
 
         if self.local is not None and not self.stop_event.is_set():
             self.heartbeat = time.monotonic()
-            results.append(self.poll_local())
+            try:
+                res = self.poll_local()
+            except Exception as e:
+                # 想定外の失敗でも、XBee の子機の結果まで巻き込んで捨てない
+                log.exception("local sensor poll failed")
+                self._local_failed(f"{type(e).__name__}: {e}")
+                node = self.cfg.local.node
+                res = PollResult(node, LOCAL_MAC, "PORT_ERR",
+                                 {"node": node, "mac": LOCAL_MAC, "status": "PORT_ERR",
+                                  "raw": (self.local_error or "")[:200], "ts": time.time()})
+            results.append(res)
             results.sort(key=lambda r: r.node)
 
         for r in results:

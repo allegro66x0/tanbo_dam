@@ -18,6 +18,23 @@ class LocalSensorError(RuntimeError):
     pass
 
 
+def _io_errors() -> tuple[type[BaseException], ...]:
+    """ポートの読み書きで起きうる例外。
+
+    termios.error は OSError の仲間ではない。USB が抜けて挿し直されたあと、開いたままの
+    古いポートへの tcflush で実機で発生した(Input/output error)。
+    """
+    import serial
+
+    errs: list[type[BaseException]] = [serial.SerialException, OSError]
+    try:
+        import termios
+        errs.append(termios.error)
+    except ImportError:   # Windows
+        pass
+    return tuple(errs)
+
+
 class LocalSensor:
     def __init__(self, port: str, baud: int):
         self.port = port
@@ -39,7 +56,7 @@ class LocalSensor:
             # 基板によっては開いた瞬間にリセットされる。起動メッセージは読み捨てる
             time.sleep(BOOT_WAIT_S)
             s.reset_input_buffer()
-        except (serial.SerialException, OSError) as e:
+        except _io_errors() as e:
             try:
                 s.close()
             except Exception:
@@ -63,8 +80,6 @@ class LocalSensor:
 
     def send(self, data: bytes) -> None:
         """溜まっている入力(前回の遅れた応答・デバッグ出力)を捨ててから送る。"""
-        import serial
-
         if not self.is_open:
             raise LocalSensorError("not open")
         try:
@@ -72,13 +87,11 @@ class LocalSensor:
             self._buf = b""
             self._ser.write(data)
             self._ser.flush()
-        except (serial.SerialException, OSError) as e:
+        except _io_errors() as e:
             raise LocalSensorError(f"write failed: {e}") from e
 
     def readline(self, timeout: float) -> Optional[bytes]:
         """1行(前後の空白を除く)を返す。timeout 秒以内に行が揃わなければ None。"""
-        import serial
-
         if not self.is_open:
             raise LocalSensorError("not open")
         end = time.monotonic() + timeout
@@ -93,7 +106,7 @@ class LocalSensor:
             try:
                 self._ser.timeout = min(remaining, 0.2)
                 chunk = self._ser.read(self._ser.in_waiting or 1)
-            except (serial.SerialException, OSError) as e:
+            except _io_errors() as e:
                 raise LocalSensorError(f"read failed: {e}") from e
             self._buf += chunk
             if len(self._buf) > 4096:   # 改行の来ないゴミが続く場合
