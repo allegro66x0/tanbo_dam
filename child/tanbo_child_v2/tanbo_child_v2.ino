@@ -9,6 +9,9 @@
 // - 距離ではなくエコー時間(往復 µs)を返す。音速の温度補正は後処理で行う
 // - ノード番号は持たない(親機が XBee の MAC で判定)。全子機で同一コード
 // - XBee は透過モード(AP=0)、DH/DL=0(宛先コーディネータ)、BD=9600
+// - USB シリアル(115200)からの REQ にも同じ形式で USB に返す。親機に USB でつないで
+//   「親機の地点のセンサ」として使うため(XBee なしで可)。USB にはデバッグ出力も流れるが、
+//   親機は D2 で始まる行だけを読む
 //
 // 配線(旧子機と同じ):
 //   HC-SR04 TRIG ← GPIO4、ECHO → 10k/20k 分圧 → GPIO18
@@ -17,7 +20,7 @@
 
 #include <Arduino.h>
 
-#define FW_VERSION "2.0.0"
+#define FW_VERSION "2.1.0"
 
 #define TRIG_PIN 4
 #define ECHO_PIN 18
@@ -38,9 +41,14 @@ const size_t RX_LINE_MAX = 64;
 // 親機からの REQ がこの時間途絶えたら自分を再起動(UART 固着などへの保険)
 const unsigned long NO_REQ_RESTART_MS = 6UL * 3600UL * 1000UL;
 
-char line_buf[RX_LINE_MAX + 1];
-size_t line_len = 0;
-unsigned long last_rx_ms = 0;
+// 受信口ごとの行バッファ(XBee と USB)
+struct LineReader {
+  char buf[RX_LINE_MAX + 1];
+  size_t len;
+  unsigned long last_rx_ms;
+};
+LineReader xbee_rx = {};
+LineReader usb_rx = {};
 unsigned long last_req_ms = 0;
 
 // -----------------------------------------------------------------------------
@@ -66,7 +74,8 @@ void sort_long(long *a, int n) {
   }
 }
 
-void measure_and_reply(long seq) {
+// REQ が届いた口(XBee なら Serial2、USB なら Serial)に返す
+void measure_and_reply(long seq, Stream &reply_to) {
   long ok_us[N_TRY];
   int n_ok = 0;
   for (int i = 0; i < N_TRY; i++) {
@@ -88,9 +97,11 @@ void measure_and_reply(long seq) {
   char out[96];
   snprintf(out, sizeof(out), "D2,%ld,%d,%d,%ld,%ld,%ld,%lu,%s\n",
            seq, n_ok, N_TRY, med, mn, mx, millis() / 1000UL, FW_VERSION);
-  Serial2.print(out);
-  Serial.print("[REQ] -> ");
-  Serial.print(out);
+  reply_to.print(out);
+  if (&reply_to != &Serial) {
+    Serial.print("[REQ] -> ");
+    Serial.print(out);
+  }
 }
 
 // "REQ" または "REQ,<seq>" を含む行なら seq(なければ -1)を返す。REQ でなければ -2
@@ -106,16 +117,16 @@ long parse_req(const char *s) {
   return (v <= 65535) ? v : -1;
 }
 
-void handle_line() {
-  line_buf[line_len] = '\0';
+void handle_line(LineReader &lr, Stream &reply_to) {
+  lr.buf[lr.len] = '\0';
   // 前後の空白・CR を除去
   size_t start = 0;
-  while (start < line_len && (line_buf[start] == ' ' || line_buf[start] == '\r')) start++;
-  size_t end = line_len;
-  while (end > start && (line_buf[end - 1] == ' ' || line_buf[end - 1] == '\r')) end--;
-  line_buf[end] = '\0';
-  const char *s = line_buf + start;
-  line_len = 0;
+  while (start < lr.len && (lr.buf[start] == ' ' || lr.buf[start] == '\r')) start++;
+  size_t end = lr.len;
+  while (end > start && (lr.buf[end - 1] == ' ' || lr.buf[end - 1] == '\r')) end--;
+  lr.buf[end] = '\0';
+  const char *s = lr.buf + start;
+  lr.len = 0;
   if (*s == '\0') return;
 
   long seq = parse_req(s);
@@ -125,24 +136,24 @@ void handle_line() {
     return;
   }
   last_req_ms = millis();
-  measure_and_reply(seq);
+  measure_and_reply(seq, reply_to);
 }
 
-void poll_serial() {
-  while (Serial2.available() > 0) {
-    int c = Serial2.read();
+void poll_port(Stream &port, LineReader &lr) {
+  while (port.available() > 0) {
+    int c = port.read();
     if (c < 0) break;
-    last_rx_ms = millis();
+    lr.last_rx_ms = millis();
     if (c == '\n') {
-      handle_line();
-    } else if (line_len < RX_LINE_MAX) {
-      line_buf[line_len++] = (char)c;
+      handle_line(lr, port);
+    } else if (lr.len < RX_LINE_MAX) {
+      lr.buf[lr.len++] = (char)c;
     } else {
-      line_len = 0;   // 長すぎる行は捨てる
+      lr.len = 0;   // 長すぎる行は捨てる
     }
   }
-  if (line_len > 0 && millis() - last_rx_ms >= LINE_IDLE_MS) {
-    handle_line();
+  if (lr.len > 0 && millis() - lr.last_rx_ms >= LINE_IDLE_MS) {
+    handle_line(lr, port);
   }
 }
 
@@ -157,7 +168,8 @@ void setup() {
 }
 
 void loop() {
-  poll_serial();
+  poll_port(Serial2, xbee_rx);
+  poll_port(Serial, usb_rx);
   if (millis() - last_req_ms > NO_REQ_RESTART_MS) {
     Serial.println("no REQ for a long time -> restart");
     delay(100);
