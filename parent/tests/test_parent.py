@@ -14,9 +14,10 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from xbee_emu import COORD_MAC, ChildModel, XBeeEmulator  # noqa: E402
+from xbee_emu import COORD_MAC, ChildModel, UsbChildEmulator, XBeeEmulator  # noqa: E402
 
 from tanbo import config as config_mod  # noqa: E402
+from tanbo import local as local_mod  # noqa: E402
 from tanbo import protocol  # noqa: E402
 from tanbo.control import call, parse_duration  # noqa: E402
 from tanbo.main import App  # noqa: E402
@@ -114,7 +115,7 @@ class FakeGas:
 
 
 # ---------------------------------------------------------------- helpers
-def make_cfg(tmp, port, url, nodes, **sched):
+def make_cfg(tmp, port, url, nodes, extra="", **sched):
     sock = os.path.join(tmp, "ctl.sock")
     toml = f"""
 [xbee]
@@ -132,6 +133,7 @@ period_s = 1
 db_path = "{tmp}/tanbo.db"
 [control]
 socket = "{sock}"
+{extra}
 [nodes]
 """ + "\n".join(f'{n} = "{m}"' for n, m in nodes.items())
     p = os.path.join(tmp, "parent.toml")
@@ -418,3 +420,101 @@ def test_service_and_ctl(env):
     th.join(timeout=60)
     assert not th.is_alive()
     assert not os.path.exists(sock)
+
+
+# ---------------------------------------------------------------- 親機の地点のセンサ([local])
+LOCAL_NODE = 11
+
+
+def local_cfg(env, usb_port):
+    tmp, gas, emu, _, _ = env
+    extra = f'[local]\nport = "{usb_port}"\nnode = {LOCAL_NODE}\nreply_timeout_s = 1.0\n'
+    return make_cfg(tmp, emu.port, gas.url, {n: MACS[n] for n in range(7)}, extra=extra)
+
+
+@pytest.fixture
+def usb(monkeypatch):
+    monkeypatch.setattr(local_mod, "BOOT_WAIT_S", 0)
+    devs = []
+
+    def make(kind="v2"):
+        devs.append(UsbChildEmulator(kind))
+        return devs[-1]
+    yield make
+    for d in devs:
+        d.close()
+
+
+def test_local_sensor_in_cycle(env, usb):
+    tmp, gas, emu, _, _ = env
+    dev = usb("v2")
+    cfg = local_cfg(env, dev.port)
+    assert cfg.node_ids() == [0, 1, 2, 3, 4, 5, 6, LOCAL_NODE]
+    app = App(cfg)
+    app.radio.open()
+    res = app.poller.run_cycle(time.time())
+    assert [r.node for r in res] == cfg.node_ids()
+    r = {x.node: x for x in res}[LOCAL_NODE]
+    assert r.status == "OK", r.row
+    assert r.row["med_us"] == 2900 and r.row["mac"] == "LOCAL" and r.row["tx_status"] is None
+    assert abs(r.row["dist_cm"] - 49.79) < 0.1 and r.row["fw"] == "2.1.0"
+    assert dev.requests[-1] == b"REQ,%d" % r.row["seq"]
+    assert {x.node: x.status for x in res}[0] == "OK"   # XBee 側はこれまでどおり
+    # 記録されて GAS へも送られる
+    app.uploader.upload_once()
+    assert any(row["node"] == LOCAL_NODE and row["status"] == "OK" for row in gas.rows["m"])
+    # 手動取得と status
+    assert app.poller._handle_command("get", LOCAL_NODE)["status"] == "OK"
+    s = app.handle_control("status", {})
+    assert s["local_node"] == LOCAL_NODE and s["local_open"] and s["local_error"] is None
+    app.radio.close()
+    app.local.close()
+
+
+@pytest.mark.parametrize("kind,status", [("noecho", "NO_ECHO"), ("mute", "TIMEOUT"),
+                                         ("stale", "OK")])
+def test_local_sensor_replies(env, usb, kind, status):
+    dev = usb(kind)
+    app = App(local_cfg(env, dev.port))
+    r = app.poller.poll_local()
+    assert r.status == status, r.row
+    if kind == "stale":   # 前回 seq の応答は捨てて、今回の応答を採る
+        assert r.row["med_us"] == 2900
+    app.local.close()
+
+
+def test_local_sensor_unplugged_and_back(env, usb):
+    tmp = env[0]
+    dev = usb("v2")
+    cfg = local_cfg(env, os.path.join(tmp, "no-such-usb"))
+    app = App(cfg)
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    assert res[LOCAL_NODE].status == "PORT_ERR" and res[LOCAL_NODE].row["raw"]
+    assert res[0].status == "OK"   # XBee 側の計測は止まらない
+    assert app.poller.local_error and app.poller.fatal is None
+    # 挿し直されたら次のサイクルで復帰
+    cfg.local.port = app.local.port = dev.port
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    assert res[LOCAL_NODE].status == "OK"
+    assert app.poller.local_error is None
+    app.radio.close()
+    app.local.close()
+
+
+def test_local_sensor_works_without_xbee(env, usb):
+    tmp = env[0]
+    dev = usb("v2")
+    cfg = local_cfg(env, dev.port)
+    cfg.xbee.port = os.path.join(tmp, "no-such-xbee")
+    app = App(cfg)
+    res = {r.node: r.status for r in app.poller.run_cycle(time.time())}
+    assert res[LOCAL_NODE] == "OK"
+    assert all(s == "RADIO_ERR" for n, s in res.items() if n != LOCAL_NODE)
+    app.local.close()
+
+
+def test_local_node_must_not_overlap(env):
+    tmp, gas, emu, _, _ = env
+    with pytest.raises(config_mod.ConfigError, match="重なって"):
+        make_cfg(tmp, emu.port, gas.url, {0: MACS[0]},
+                 extra='[local]\nport = "/dev/null"\nnode = 0\n')

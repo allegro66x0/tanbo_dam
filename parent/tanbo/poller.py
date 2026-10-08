@@ -3,6 +3,7 @@
 - 周期は壁時計の境界(interval の倍数 + offset)に揃える
 - 一時的な周期の上書き(設置チェック用)は期限付き。期限が来たら通常周期に戻る
 - 1サイクル = 全ノードへ順に REQ,<seq> を送り、seq が一致した応答だけ採用
+- 親機の地点のセンサ([local])は USB シリアルで同じ REQ / D2 をやりとりする。XBee の状態に関係なく測る
 """
 from __future__ import annotations
 
@@ -17,12 +18,15 @@ from typing import Any, Callable, Optional
 
 from . import protocol, sysinfo
 from .config import Config
+from .local import LocalSensorError
 from .radio import RadioError, RxEvent, TxStatusEvent
 from .store import Store
 
 log = logging.getLogger(__name__)
 
 RADIO_FATAL_AFTER_S = 1800   # XBee が使えない状態がこれ以上続いたらプロセスを終了(systemd が再起動)
+LOCAL_MAC = "LOCAL"          # 親機の地点のセンサの mac 列(XBee を通らない)
+LOCAL_WARN_EVERY_S = 1800    # 親機の地点のセンサが開けない警告の間隔
 
 
 class Schedule:
@@ -102,10 +106,13 @@ def summarize_failures(results: list["PollResult"]) -> str:
 
 class Poller(threading.Thread):
     def __init__(self, cfg: Config, radio, store: Store,
-                 health_extra: Optional[Callable[[], dict[str, Any]]] = None):
+                 health_extra: Optional[Callable[[], dict[str, Any]]] = None, local=None):
         super().__init__(name="poller", daemon=True)
         self.cfg = cfg
         self.radio = radio
+        self.local = local   # LocalSensor([local] がなければ None)
+        self.local_error: Optional[str] = None
+        self._local_warned_at = -1e9
         self.store = store
         self.schedule = Schedule(cfg.schedule.interval_s, cfg.schedule.offset_s)
         self.health_extra = health_extra or (lambda: {})
@@ -246,6 +253,78 @@ class Poller(threading.Thread):
         row["ts"] = time.time()
         return PollResult(node, mac, status, row)
 
+    # ---- 親機の地点のセンサ -------------------------------------------------
+    def _local_failed(self, err: str) -> None:
+        if self.local is not None:
+            self.local.close()
+        now = time.monotonic()
+        if err != self.local_error or now - self._local_warned_at > LOCAL_WARN_EVERY_S:
+            log.warning("親機の地点のセンサ (%s) が使えません: %s。次のサイクルで開き直します",
+                        self.cfg.local.port, err)
+            self._local_warned_at = now
+        self.local_error = err
+
+    def _ensure_local(self) -> bool:
+        if self.local.is_open:
+            return True
+        try:
+            self.local.open()
+        except LocalSensorError as e:
+            self._local_failed(str(e))
+            return False
+        if self.local_error is not None:
+            log.info("親機の地点のセンサが復帰しました")
+        self.local_error = None
+        return True
+
+    def poll_local(self) -> PollResult:
+        node = self.cfg.local.node
+        seq = self._next_seq()
+        row: dict[str, Any] = {"node": node, "mac": LOCAL_MAC, "seq": seq}
+        status = "PORT_ERR"
+        if self._ensure_local():
+            t0 = time.monotonic()
+            deadline = t0 + self.cfg.local.reply_timeout_s
+            status = "TIMEOUT"
+            try:
+                self.local.send(protocol.build_req(seq))
+                while True:
+                    self.heartbeat = time.monotonic()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    line = self.local.readline(min(remaining, 0.5))
+                    # USB には子機ファームのデバッグ出力(ping の値など)も流れてくる。D2 行だけ見る
+                    if not line or not line.startswith(b"D2,"):
+                        continue
+                    try:
+                        rep = protocol.parse_reply(line)
+                    except protocol.ParseError as e:
+                        log.warning("node %d (local) bad reply: %s", node, e)
+                        status = "BAD_REPLY"
+                        row["raw"] = line[:200].decode("ascii", "replace")
+                        row["rtt_ms"] = int((time.monotonic() - t0) * 1000)
+                        break
+                    if rep.seq != seq:
+                        log.info("node %d (local) late reply seq=%s (want %d) ignored",
+                                 node, rep.seq, seq)
+                        continue
+                    row["rtt_ms"] = int((time.monotonic() - t0) * 1000)
+                    status = "OK" if rep.n_ok else "NO_ECHO"
+                    row.update(n_ok=rep.n_ok, n_try=rep.n_try, med_us=rep.med_us,
+                               min_us=rep.min_us, max_us=rep.max_us, dist_cm=rep.dist_cm,
+                               child_uptime_s=rep.child_uptime_s, fw=rep.fw)
+                    break
+            except LocalSensorError as e:
+                self._local_failed(str(e))
+                status = "PORT_ERR"
+        if status == "PORT_ERR":
+            row["raw"] = (self.local_error or "")[:200]
+        row["status"] = status
+        row["tx_status"] = None
+        row["ts"] = time.time()
+        return PollResult(node, LOCAL_MAC, status, row)
+
     # ---- cycle ------------------------------------------------------------
     def run_cycle(self, cycle_ts: float) -> list[PollResult]:
         t_start = time.monotonic()
@@ -283,6 +362,11 @@ class Poller(threading.Thread):
                                  {"node": node, "mac": mac, "status": "RADIO_ERR",
                                   "ts": time.time()})
             results.append(res)
+
+        if self.local is not None and not self.stop_event.is_set():
+            self.heartbeat = time.monotonic()
+            results.append(self.poll_local())
+            results.sort(key=lambda r: r.node)
 
         for r in results:
             r.row.update(cycle_ts=cycle_ts, synced=None if synced is None else int(synced),
@@ -328,6 +412,8 @@ class Poller(threading.Thread):
             return {r.node: r.status for r in res}
         if cmd == "get":
             node = int(arg)
+            if self.local is not None and node == self.cfg.local.node:
+                return self.poll_local().row   # 手動取得は記録しない
             mac = self.cfg.nodes.get(node)
             if mac is None:
                 return {"error": f"node {node} は設定にありません"}
@@ -341,9 +427,11 @@ class Poller(threading.Thread):
 
     # ---- main loop ----------------------------------------------------------
     def run(self) -> None:
-        log.info("poller start: nodes=%s interval=%ds", list(self.cfg.nodes),
+        log.info("poller start: nodes=%s interval=%ds", self.cfg.node_ids(),
                  self.schedule.base_interval)
         self._ensure_radio()
+        if self.local is not None:
+            self._ensure_local()
         self.next_slot = self.schedule.next_slot()
         while not self.stop_event.is_set():
             self.heartbeat = time.monotonic()
@@ -382,6 +470,8 @@ class Poller(threading.Thread):
             self.radio.close()
         except Exception:
             pass
+        if self.local is not None:
+            self.local.close()
         log.info("poller stopped")
 
     def reschedule(self) -> None:

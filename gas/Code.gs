@@ -325,6 +325,7 @@ function writeHelp_(ss) {
     ['TIMEOUT', '子機には届いたが応答なし'],
     ['BAD_REPLY', '解析できない応答(Raw に原文)'],
     ['RADIO_ERR', '親機の XBee が使えない'],
+    ['PORT_ERR', '親機の地点のセンサ(親機に USB でつないだ ESP32)が使えない'],
   ];
   sh.clear();
   sh.getRange(1, 1, rows.length, 2).setValues(rows);

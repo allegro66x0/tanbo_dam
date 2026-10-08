@@ -13,6 +13,7 @@ from typing import Any
 
 from . import __version__, config as config_mod, sysinfo
 from .control import ControlServer
+from .local import LocalSensor
 from .poller import Poller
 from .radio import XBeeRadio
 from .store import Store
@@ -54,8 +55,9 @@ class App:
         self.cfg = cfg
         self.store = Store(cfg.storage.db_path)
         self.radio = radio or XBeeRadio(cfg.xbee.port, cfg.xbee.baud)
+        self.local = LocalSensor(cfg.local.port, cfg.local.baud) if cfg.local else None
         self.uploader = Uploader(cfg, self.store, __version__)
-        self.poller = Poller(cfg, self.radio, self.store, self._health_extra)
+        self.poller = Poller(cfg, self.radio, self.store, self._health_extra, self.local)
         self.control = ControlServer(cfg.control.socket, self)
         self.stopping = False
 
@@ -86,6 +88,10 @@ class App:
                 "override_until": until, "next_slot": self.poller.next_slot,
                 "clock_synced": sysinfo.clock_synced(),
                 "radio_open": self.radio.is_open, "local_mac": getattr(self.radio, "local_mac", None),
+                # 親機の地点のセンサ([local] がなければ None)
+                "local_node": self.cfg.local.node if self.cfg.local else None,
+                "local_open": self.local.is_open if self.local else None,
+                "local_error": self.poller.local_error,
                 "last_cycle": self.poller.last_cycle,
                 "latest": [{k: r[k] for k in ("node", "ts", "status", "dist_cm", "med_us",
                                                "n_ok", "n_try", "fw", "tx_status", "rtt_ms")}
@@ -127,7 +133,7 @@ class App:
         self.poller.start()
         self.control.start()
         sd_notify("READY=1")
-        log.info("tanbo-parent %s started (%d nodes)", __version__, len(self.cfg.nodes))
+        log.info("tanbo-parent %s started (%d nodes)", __version__, len(self.cfg.node_ids()))
 
         rc = 0
         while not self.stopping:
@@ -181,8 +187,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("digi.xbee").setLevel(logging.WARNING)
     faulthandler.enable()   # ウォッチドッグの SIGABRT 時に全スレッドのスタックを journal へ
     cfg = config_mod.load(a.config)
-    if not cfg.nodes:
-        log.error("[nodes] が空です")
+    if not cfg.node_ids():
+        log.error("[nodes] も [local] もありません")
         return 2
     app = App(cfg)
 

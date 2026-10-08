@@ -45,6 +45,14 @@ port = 8080
 # この I/F に届いた接続だけ受け付ける。LTE・Wi-Fi・USB 通信端末の側からは開けない
 allow_interfaces = ["lo", "tailscale0"]
 
+# 親機の地点のセンサ。親機に USB でつないだ ESP32 + HC-SR04(子機と同じファーム v2.1.0 以降)
+# 使うときは [local] からコメントを外す。ポートは ls -l /dev/serial/by-id/ で確認する
+# [local]
+# port = "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_XXXX-if00-port0"
+# node = 11              # この地点のノード番号。[nodes] と重ならない番号にする
+# baud = 115200
+# reply_timeout_s = 3.0
+
 [nodes]
 # ノード番号 = 子機 XBee の 64bit アドレス(xbee_ID.xlsx)
 # 0 と 11 は親機用の XBee なので計測対象にしない(子機は 11 台)

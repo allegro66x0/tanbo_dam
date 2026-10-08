@@ -74,6 +74,16 @@ sudo systemctl daemon-reload && sudo systemctl enable --now tanbo-parent tanbo-w
 
 旧サービス(旧 main.py 等)が同じシリアルポートを掴んでいると開けないので、先に止めて無効化しておく。
 
+#### 親機の地点のセンサ(任意)
+
+親機の設置場所の水位も測る場合は、ESP32 + HC-SR04 を親機に USB でつなぐ(XBee は不要)。
+
+1. ESP32 に子機と同じファーム(`child/tanbo_child_v2`、v2.1.0 以降)を書く。HC-SR04 の配線は子機と同じ
+2. `ls -l /dev/serial/by-id/` で ESP32 のポートを確認する(CP210x なら `usb-Silicon_Labs_CP210...`)
+3. `/etc/tanbo/parent.toml` の `[local]` のコメントを外し、`port` と `node`(`[nodes]` と重ならない番号)を書いて再起動
+
+シート・操作画面には、ほかの子機と同じ形でそのノード番号の行が増える。ESP32 が抜けている間は `PORT_ERR` を記録し、挿し直せば次の計測で戻る。
+
 ### 操作画面(スマホから)
 
 親機と同じ tailnet に入ったスマホで `http://<親機の Tailscale 名>:8080/` を開く(MagicDNS が無効なら `http://100.x.y.z:8080/`)。ホーム画面に追加しておくと現地で開きやすい。
@@ -115,6 +125,7 @@ journalctl -u tanbo-web -f
 | `TIMEOUT` | 配送は成功したが応答なし |
 | `BAD_REPLY` | 解析できない応答(`Raw` に原文) |
 | `RADIO_ERR` | 親機の XBee が使えない |
+| `PORT_ERR` | 親機の地点のセンサ(USB の ESP32)が使えない(`Raw` に理由) |
 
 ### エラーの見方
 
@@ -174,6 +185,7 @@ SD カード保護: `raspi-config` の overlayfs でルートを読み取り専�
 - 約 5cm 未満(290µs)と約 2m 超(11650µs)のエコーは捨てる。Node_5 の飛びの解析用に min/max も記録する
 - 親機からの REQ が 6 時間途絶えると ESP32 を再起動する
 - 旧ファームの子機が混在していても親機は受け付ける(`OK_V1`)。順次入れ替えてよい
+- USB シリアル(115200 bps)から届いた REQ には USB に返す(v2.1.0 以降)。同じファームを親機の地点のセンサにも使う
 
 ## 5. テスト
 

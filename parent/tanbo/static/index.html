@@ -244,6 +244,7 @@ const STATUS = {
   TIMEOUT:   ["critical", "✕", "応答なし"],
   TX_FAIL:   ["critical", "✕", "届かない"],
   RADIO_ERR: ["critical", "✕", "親機XBee異常"],
+  PORT_ERR:  ["critical", "✕", "親機センサ異常"],
 };
 const isOk = (s) => s === "OK" || s === "OK_V1";
 // XBee の Transmit Status(配送コード)
@@ -339,6 +340,7 @@ function render() {
   if (ov.service_error || (svc && !svc.radio_open) || ov.db_error) severe = true;
   if (ov.service_error) msgs.push(`<p>${esc(ov.service_error)}。記録済みのデータだけ表示しています。SSH で <code>sudo systemctl status tanbo-parent</code> を確認してください。</p>`);
   if (svc && !svc.radio_open) msgs.push(`<p>親機の XBee が開けていません。USB に挿さっているか確認してください。挿せば30秒以内に自動で再開します。</p>`);
+  if (svc && svc.local_error) msgs.push(`<p>親機の地点のセンサ(USB の ESP32)が開けていません: ${esc(svc.local_error)}。挿せば次の計測で自動的に再開します。</p>`);
   if (svc && svc.clock_synced === false) msgs.push(`<p>親機の時計がまだ同期していません。回線がつながると直ります。</p>`);
   if (ov.db_error) msgs.push(`<p>${esc(ov.db_error)}</p>`);
   banner.innerHTML = msgs.join("");
@@ -442,6 +444,7 @@ function renderNodes() {
     else if (last.status === "TX_FAIL" && last.tx_status) meta = `${n.fails}回連続、${TX_SHORT[last.tx_status] || txHex(last.tx_status)}`;
     else meta = n.last_ok_ts ? `${n.fails}回連続、右は${ago(n.last_ok_ts)}の値` : `${n.fails}回連続、正常値なし`;
     if (stale) meta = `⚠ 前回の記録 ${ago(last.ts)}`;
+    if (n.node === state.ov.local_node) meta = `親機の地点・${meta}`;
     const row = li.querySelector(".node-row");
     row.setAttribute("aria-label", `ノード ${n.node}`);
     row.innerHTML =
@@ -645,6 +648,7 @@ function renderParent() {
   if (svc) {
     kv.push(["時計の同期", svc.clock_synced ? "済み" : svc.clock_synced === false ? "未同期" : "不明"]);
     kv.push(["親機 XBee", svc.radio_open ? (svc.local_mac || "接続中") : "開けていません"]);
+    if (svc.local_node != null) kv.push([`親機の地点のセンサ(ノード ${svc.local_node})`, svc.local_open ? "接続中" : "開けていません"]);
     kv.push(["送信", svc.upload_error
       ? `${svc.upload_error_since ? when(svc.upload_error_since) + "から" : ""}失敗中: ${svc.upload_error}`
       : `最終成功 ${when(svc.upload_last_ok)}`]);

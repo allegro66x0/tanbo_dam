@@ -24,6 +24,9 @@ def _print_status(s: dict) -> None:
     print(f"親機 v{s['version']}  周期 {s['interval_s']}s {ov}  次回 {fmt_ts(s['next_slot'])}")
     print(f"時刻同期 {s['clock_synced']}  XBee {'OK' if s['radio_open'] else 'NG'} "
           f"{s.get('local_mac') or ''}")
+    if s.get("local_node") is not None:
+        print(f"親機の地点のセンサ ノード {s['local_node']}  {'OK' if s['local_open'] else 'NG'}"
+              f"{'  ' + s['local_error'] if s.get('local_error') else ''}")
     lc = s.get("last_cycle") or {}
     if lc:
         print(f"前回サイクル {fmt_ts(lc['cycle_ts'])}  {lc['n_ok']}/{lc['n_nodes']} OK  "

@@ -13,6 +13,7 @@
   - store.py: SQLite(WAL)に先に書く store-and-forward
   - uploader.py: 未送信をまとめて GAS へ POST、返ってきた hwm まで送信済みにする
   - radio.py: digi-xbee、送信は非同期、Transmit Status と受信をイベントキューへ
+  - local.py: 親機の地点のセンサ(USB でつないだ ESP32、子機と同じファーム)。設定 `[local]`、USB 上で同じ REQ / D2
   - web.py + static/index.html: 操作画面(別プロセス tanbo-web)。SQLite を読み取り専用で読み、操作は制御ソケット経由。標準ライブラリのみ
 - `gas/` 受信 GAS。書き込み先はスプレッドシート **tambo_data2**(`SPREADSHEET_ID`)。旧 `tanbo_data` は凍結
 - `child/tanbo_child_v2/` 子機ファーム(ESP32-WROVER + HC-SR04)。全子機同一コード
@@ -25,6 +26,7 @@
 - 子機は距離ではなくエコー時間(往復 µs)の中央値・最小・最大を返す。温度補正は後処理
 - 周期: 通常 10 分。設置チェック時は `tanboctl check` で一時的に 60 秒(期限付きで自動復帰)
 - deep sleep は見送り(子機は常時起動、親機からのポーリング)
+- 親機の地点の水位は、親機に USB でつないだ ESP32 + HC-SR04 で測る。ファームは子機と同じ(USB からの REQ にも応える)。ノード番号は `[local] node`
 - 親機の操作はローカルの操作画面を Tailscale 経由でスマホから開いて行う。GAS からの操作はしない(GAS は受信専用)
 
 ## テスト

@@ -142,3 +142,35 @@ def test_interface_allowlist(stack):
     assert InterfaceAllowlist(["lo"]).allows("::ffff:127.0.0.1")
     assert not InterfaceAllowlist(["lo"]).allows("100.64.1.2")
     assert InterfaceAllowlist([]).allows("203.0.113.5")
+
+
+def test_overview_includes_local_sensor(monkeypatch):
+    from tanbo import local as local_mod
+    from xbee_emu import UsbChildEmulator
+    monkeypatch.setattr(local_mod, "BOOT_WAIT_S", 0)
+    tmp = tempfile.mkdtemp()
+    gas = FakeGas()
+    emu = XBeeEmulator({MACS[0]: ChildModel("v2")})
+    dev = UsbChildEmulator("v2")
+    cfg = make_cfg(tmp, emu.port, gas.url, {0: MACS[0]},
+                   extra=f'[local]\nport = "{dev.port}"\nnode = 11\n')
+    cfg.web.allow_interfaces = ["lo"]
+    app = App(cfg)
+    app.poller.run_cycle(time.time())
+    srv = serve(cfg, "127.0.0.1", 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}"
+    try:
+        code, ov = req(base, "/api/overview")
+        assert code == 200 and ov["local_node"] == 11
+        assert [n["node"] for n in ov["nodes"]] == [0, 11]
+        assert {n["node"]: n["last"]["status"] for n in ov["nodes"]} == {0: "OK", 11: "OK"}
+        code, h = req(base, "/api/history?node=11&hours=1")
+        assert code == 200 and h["rows"][-1][1] == "OK"
+    finally:
+        srv.shutdown()
+        app.radio.close()
+        app.local.close()
+        emu.close()
+        dev.close()
+        gas.close()

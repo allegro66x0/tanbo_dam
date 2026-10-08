@@ -167,7 +167,8 @@ class WebApp:
                                "service": None, "service_error": None,
                                "nodes": [], "health": [], "db_error": None,
                                "check_interval_s": self.cfg.schedule.check_interval_s,
-                               "check_default_duration_s": self.cfg.schedule.check_default_duration_s}
+                               "check_default_duration_s": self.cfg.schedule.check_default_duration_s,
+                               "local_node": self.cfg.local.node if self.cfg.local else None}
         try:
             st = call(self.cfg.control.socket, "status", timeout=5)
             st.pop("latest", None)
@@ -179,12 +180,12 @@ class WebApp:
         except Exception as e:
             res["service_error"] = f"計測サービスから応答がありません({type(e).__name__})"
         try:
-            res["nodes"] = self.db.nodes(list(self.cfg.nodes))
+            res["nodes"] = self.db.nodes(self.cfg.node_ids())
             res["health"] = self.db.health()
         except sqlite3.Error as e:
             res["db_error"] = f"データベースを読めません: {e}"
             res["nodes"] = [{"node": n, "last": None, "last_ok_ts": None, "last_ok_dist": None,
-                             "fails": 0} for n in self.cfg.nodes]
+                             "fails": 0} for n in self.cfg.node_ids()]
         return res
 
     def command(self, cmd: str, args: dict[str, Any]) -> tuple[int, Any]:
@@ -250,7 +251,7 @@ def make_handler(app: WebApp):
                     q = parse_qs(u.query)
                     node = int(q["node"][0])
                     hours = min(float(q.get("hours", ["24"])[0]), HISTORY_MAX_HOURS)
-                    if node not in app.cfg.nodes:
+                    if node not in app.cfg.node_ids():
                         self._json(404, {"error": "そのノードは設定にありません"})
                         return
                     self._json(200, {"node": node, "hours": hours,

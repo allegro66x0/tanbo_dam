@@ -150,3 +150,64 @@ class XBeeEmulator:
             body = b"D2,%d,7,7,%d,%d,%d,1234,2.0.0\n" % (seq, child.echo_us, child.echo_us,
                                                        child.echo_us)
         self._later(delay, lambda: self.send_rx(dest, body))
+
+
+class UsbChildEmulator:
+    """親機に USB でつないだ ESP32(子機ファーム)のエミュレータ。pty の片側で行を話す。
+
+    kind: v2 | noecho | mute | stale(前回 seq の応答を先に出してから正しい応答)
+    実機と同じく、応答の前後に ping のデバッグ行を流す。
+    """
+
+    def __init__(self, kind: str = "v2", echo_us: int = 2900):
+        self.kind = kind
+        self.echo_us = echo_us
+        self.requests: list[bytes] = []
+        self.master, self.slave = os.openpty()
+        tty.setraw(self.master)
+        self.port = os.ttyname(self.slave)
+        self._stop = threading.Event()
+        threading.Thread(target=self._reader, daemon=True).start()
+        os.write(self.master, b"=== tanbo child v2.1.0 ===\r\n")
+
+    def close(self):
+        self._stop.set()
+        for fd in (self.master, self.slave):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _write(self, data: bytes):
+        try:
+            os.write(self.master, data)
+        except OSError:
+            pass
+
+    def _reader(self):
+        buf = b""
+        while not self._stop.is_set():
+            try:
+                buf += os.read(self.master, 256)
+            except OSError:
+                return
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                self._handle(line.strip())
+
+    def _handle(self, line: bytes):
+        if not line.startswith(b"REQ"):
+            return
+        self.requests.append(line)
+        seq = int(line.split(b",")[1])
+        if self.kind == "mute":
+            return
+        e = self.echo_us
+        for i in range(7):
+            self._write(b"  ping %d: %d us\r\n" % (i, 0 if self.kind == "noecho" else e))
+        if self.kind == "noecho":
+            self._write(b"D2,%d,0,7,-1,-1,-1,42,2.1.0\r\n" % seq)
+            return
+        if self.kind == "stale":
+            self._write(b"D2,%d,7,7,1,1,1,42,2.1.0\r\n" % ((seq - 1) & 0xFFFF))
+        self._write(b"D2,%d,7,7,%d,%d,%d,42,2.1.0\r\n" % (seq, e, e - 10, e + 10))

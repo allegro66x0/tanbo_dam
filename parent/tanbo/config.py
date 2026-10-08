@@ -20,6 +20,15 @@ class XBeeCfg:
 
 
 @dataclass
+class LocalCfg:
+    """親機の地点のセンサ(親機に USB でつないだ ESP32、子機と同じファーム)。"""
+    port: str
+    node: int                      # この地点のノード番号([nodes] と重ならない番号)
+    baud: int = 115200
+    reply_timeout_s: float = 3.0
+
+
+@dataclass
 class ScheduleCfg:
     interval_s: int = 600                  # 通常運用の周期
     check_interval_s: int = 60             # 設置チェック時の周期
@@ -74,9 +83,17 @@ class Config:
     control: ControlCfg = field(default_factory=ControlCfg)
     web: WebCfg = field(default_factory=WebCfg)
     nodes: dict[int, str] = field(default_factory=dict)   # node -> MAC(大文字16桁)
+    local: Optional[LocalCfg] = None
 
     def mac_to_node(self) -> dict[str, int]:
         return {mac: n for n, mac in self.nodes.items()}
+
+    def node_ids(self) -> list[int]:
+        """XBee の子機と親機の地点のセンサを合わせたノード番号。"""
+        ids = list(self.nodes)
+        if self.local is not None:
+            ids.append(self.local.node)
+        return sorted(ids)
 
 
 def _section(raw: dict, name: str, cls, required: bool = False):
@@ -111,6 +128,8 @@ def load(path: str | Path) -> Config:
         control=_section(raw, "control", ControlCfg),
         web=_section(raw, "web", WebCfg),
     )
+    if raw.get("local") is not None:
+        cfg.local = _section(raw, "local", LocalCfg)
     nodes = {}
     for k, v in (raw.get("nodes") or {}).items():
         try:
@@ -128,6 +147,11 @@ def load(path: str | Path) -> Config:
             raise ConfigError(f"schedule.{name} は 10〜86400 秒")
     if cfg.xbee.reply_timeout_s <= 0:
         raise ConfigError("xbee.reply_timeout_s は正の値")
+    if cfg.local is not None:
+        if cfg.local.node in cfg.nodes:
+            raise ConfigError(f"local.node = {cfg.local.node} は [nodes] と重なっています")
+        if cfg.local.reply_timeout_s <= 0:
+            raise ConfigError("local.reply_timeout_s は正の値")
     if not 1 <= cfg.web.port <= 65535:
         raise ConfigError("web.port は 1〜65535")
     if cfg.health.modem not in ("none", "mmcli"):
