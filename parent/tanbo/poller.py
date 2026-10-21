@@ -259,8 +259,9 @@ class Poller(threading.Thread):
             self.local.close()
         now = time.monotonic()
         if err != self.local_error or now - self._local_warned_at > LOCAL_WARN_EVERY_S:
-            log.warning("親機の地点のセンサ (%s) が使えません: %s。次のサイクルで開き直します",
-                        self.cfg.local.port, err)
+            lc = self.cfg.local
+            where = lc.port if lc.type == "usb" else f"gpio trig={lc.trig} echo={lc.echo}"
+            log.warning("親機の地点のセンサ (%s) が使えません: %s。次のサイクルで開き直します", where, err)
             self._local_warned_at = now
         self.local_error = err
 
@@ -282,7 +283,21 @@ class Poller(threading.Thread):
         seq = self._next_seq()
         row: dict[str, Any] = {"node": node, "mac": LOCAL_MAC, "seq": seq}
         status = "PORT_ERR"
-        if self._ensure_local():
+        if self._ensure_local() and self.cfg.local.type == "gpio":
+            # GPIO の HC-SR04 は親機の中で子機と同じ測り方をする。seq は記録の対応づけ用に振るだけ
+            t0 = time.monotonic()
+            try:
+                self.heartbeat = time.monotonic()
+                samples, n_ok, med, mn, mx = self.local.burst()
+                log.debug("node %d (gpio) samples %s", node, samples)
+                status = "OK" if n_ok else "NO_ECHO"
+                row.update(n_ok=n_ok, n_try=len(samples), med_us=med, min_us=mn, max_us=mx,
+                           dist_cm=protocol.us_to_cm_20c(med), child_uptime_s=None, fw="gpio",
+                           rtt_ms=int((time.monotonic() - t0) * 1000))
+            except LocalSensorError as e:
+                self._local_failed(str(e))
+                status = "PORT_ERR"
+        elif self.local.is_open:
             t0 = time.monotonic()
             deadline = t0 + self.cfg.local.reply_timeout_s
             status = "TIMEOUT"

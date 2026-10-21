@@ -21,11 +21,19 @@ class XBeeCfg:
 
 @dataclass
 class LocalCfg:
-    """親機の地点のセンサ(親機に USB でつないだ ESP32、子機と同じファーム)。"""
-    port: str
+    """親機の地点のセンサ。
+
+    type = "usb":  親機に USB でつないだ ESP32(子機と同じファーム)。port が要る
+    type = "gpio": 親機の GPIO に直接つないだ HC-SR04(TRIG / ECHO。ECHO は 3.3 V に分圧)
+    """
     node: int                      # この地点のノード番号([nodes] と重ならない番号)
+    type: str = "usb"
+    port: str = ""
     baud: int = 115200
     reply_timeout_s: float = 3.0
+    chip: str = "/dev/gpiochip0"   # type = "gpio" のとき
+    trig: int = 23                 # BCM 番号(物理ピン 16)
+    echo: int = 24                 # BCM 番号(物理ピン 18)
 
 
 @dataclass
@@ -152,6 +160,14 @@ def load(path: str | Path) -> Config:
             raise ConfigError(f"local.node = {cfg.local.node} は [nodes] と重なっています")
         if cfg.local.reply_timeout_s <= 0:
             raise ConfigError("local.reply_timeout_s は正の値")
+        if cfg.local.type not in ("usb", "gpio"):
+            raise ConfigError("local.type は usb / gpio")
+        if cfg.local.type == "usb" and not cfg.local.port:
+            raise ConfigError('local.type = "usb" には port が要ります')
+        if cfg.local.type == "gpio":
+            if cfg.local.trig == cfg.local.echo or not all(
+                    0 <= p <= 27 for p in (cfg.local.trig, cfg.local.echo)):
+                raise ConfigError("local.trig / echo は別々の BCM 番号(0〜27)")
     if not 1 <= cfg.web.port <= 65535:
         raise ConfigError("web.port は 1〜65535")
     if cfg.health.modem not in ("none", "mmcli"):

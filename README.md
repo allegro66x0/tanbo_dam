@@ -84,6 +84,12 @@ sudo systemctl daemon-reload && sudo systemctl enable --now tanbo-parent tanbo-w
 
 シート・操作画面には、ほかの子機と同じ形でそのノード番号の行が増える。ESP32 が抜けている間は `PORT_ERR` を記録し、挿し直せば次の計測で戻る。
 
+HC-SR04 を親機の GPIO に直接つなぐこともできる(`type = "gpio"`、par2 で使う)。
+物理ピン 2 = 5V → VCC、16 = GPIO23 → TRIG、18 = GPIO24 ← ECHO、20 = GND。**ECHO は 5 V なので、10kΩ(直列)と 20kΩ(GPIO24–GND)で約 3.3 V に分圧する**(Pi の GPIO は 3.3 V までしか耐えない)。
+子機と同じく 60 ms おきに 7 回測り、エコー時間の中央値・最小・最大を記録する(`FW` 列は `gpio`)。
+パルス幅は libgpiod のエッジイベント(カーネルが付けるタイムスタンプ)から取るので、`/opt/tanbo/venv` に `gpiod` を入れる:
+`sudo /opt/tanbo/venv/bin/pip install /opt/tanbo[gpio]`
+
 ### 操作画面(スマホから)
 
 親機と同じ tailnet に入ったスマホで `http://<親機の Tailscale 名>:8080/` を開く(MagicDNS が無効なら `http://100.x.y.z:8080/`)。ホーム画面に追加しておくと現地で開きやすい。
@@ -180,12 +186,15 @@ SD カード保護: `raspi-config` の overlayfs でルートを読み取り専�
 ## 4. 子機
 
 `child/tanbo_child_v2/tanbo_child_v2.ino` を全子機に書き込む。配線と XBee 設定は旧子機と同じ(AP=0、DH/DL=0、BD=9600)。
+親機を 2 台置くときは、子機の XBee を AP=1(API モード)にする(v2.2.0 以降)。応答が REQ を送った親機に返るようになる。
+AP の切り替えは、コーディネータがいる状態で `child/tools/xbee_lab.py remote-set --mac <子機> AP=01` で無線越しにできる。
 
 - REQ を受けた瞬間に 60ms 間隔で 7 回測り、有効エコー時間の中央値・最小・最大を返す
 - 約 5cm 未満(290µs)と約 2m 超(11650µs)のエコーは捨てる。Node_5 の飛びの解析用に min/max も記録する
 - 親機からの REQ が 6 時間途絶えると ESP32 を再起動する
 - 旧ファームの子機が混在していても親機は受け付ける(`OK_V1`)。順次入れ替えてよい
 - USB シリアル(115200 bps)から届いた REQ には USB に返す(v2.1.0 以降)。同じファームを親機の地点のセンサにも使う
+- XBee が AP=1 なら、REQ の送り主へ API のフレームで返す。AP=0 なら今までどおり行で返す(v2.2.0 以降、自動で見分ける)
 
 ## 5. テスト
 
@@ -193,6 +202,8 @@ SD カード保護: `raspi-config` の overlayfs でルートを読み取り専�
 cd parent && python3 -m pytest -q tests     # 実 digi-xbee + pty XBee エミュレータ + 偽 GAS + 操作画面 API
 python3 parent/tests/demo_web.py 8099       # 合成データで操作画面を起動(見た目の確認用)
 node gas/test_gas.js                        # Code.gs を Apps Script モック上で
+g++ -std=c++17 -I child/tools/host_test -x c++ child/tools/host_test/test_child.cpp -o /tmp/t && /tmp/t   # 子機ファーム(Linux / Pi)
 ```
 
 子機は C++ のモック環境で、バースト測定、中央値、ブランキング、改行なし REQ、REQ 途絶時の再起動を確認済み。いずれも実機では未確認。
+`child/tools/host_test/` は v2.2.0 で追加した試験で、ファーム本体をそのままパソコン用にコンパイルし、透過モードの行・API のフレーム(送り主へ返す、チェックサム、細切れ・途中切れ)・USB を確かめる。

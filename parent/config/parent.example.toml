@@ -52,6 +52,15 @@ allow_interfaces = ["lo", "tailscale0"]
 # node = 11              # この地点のノード番号。[nodes] と重ならない番号にする
 # baud = 115200
 # reply_timeout_s = 3.0
+#
+# HC-SR04 を親機の GPIO に直接つなぐ場合(par2)。ECHO は 10k/20k で 3.3 V に分圧すること
+# 物理ピン 2 = 5V、16 = GPIO23(TRIG)、18 = GPIO24(ECHO)、20 = GND。gpiod(libgpiod v2)が要る
+# [local]
+# type = "gpio"
+# node = 21             # この地点のノード番号。[nodes] と重ならない番号にする
+# trig = 23             # BCM 番号
+# echo = 24
+# chip = "/dev/gpiochip0"
 
 [nodes]
 # ノード番号 = 子機 XBee の 64bit アドレス(xbee_ID.xlsx)

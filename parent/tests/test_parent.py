@@ -554,3 +554,104 @@ def test_local_sensor_unexpected_error_keeps_xbee_rows(env, usb, monkeypatch):
     assert res[0].status == "OK"
     assert app.store.unsent_count("m") == 8
     app.radio.close()
+
+
+# ---------------------------------------------------------------- 親機の地点のセンサ(GPIO、par2)
+class FakeGpio(local_mod.GpioSensor):
+    """GPIO の代わりに、決めたエコー時間を順に返す。"""
+
+    def __init__(self, samples, fail_open=False):
+        super().__init__("/dev/null", 23, 24)
+        self.samples = list(samples)
+        self.fail_open = fail_open
+        self.opened = 0
+
+    def open(self):
+        if self.fail_open:
+            raise local_mod.LocalSensorError("GPIO を開けない (テスト)")
+        self.opened += 1
+        self._req = object()
+
+    def close(self):
+        self._req = None
+
+    def ping_us(self):
+        return self.samples.pop(0) if self.samples else 0
+
+
+def gpio_cfg(env, extra=""):
+    tmp, gas, emu, _, _ = env
+    return make_cfg(tmp, emu.port, gas.url, {n: MACS[n] for n in range(7)},
+                    extra=f'[local]\ntype = "gpio"\nnode = {LOCAL_NODE}\n{extra}')
+
+
+def test_summarize_echo_matches_firmware():
+    # 子機ファームと同じ: 範囲外(0、290 未満、11650 超)を捨て、偶数個なら中央 2 つの平均
+    assert local_mod.summarize_echo([0, 0, 0]) == (0, None, None, None)
+    assert local_mod.summarize_echo([3000, 0, 2900, 3100, 200, 20000, 3050]) == (4, 3025, 2900, 3100)
+    assert local_mod.summarize_echo([1500, 1400, 1600]) == (3, 1500, 1400, 1600)
+
+
+def test_local_gpio_config():
+    tmp = tempfile.mkdtemp()
+    base = f'[xbee]\nport = "/x"\n[upload]\nurl = "http://x"\ntoken = "t"\n[storage]\ndb_path = "{tmp}/d.db"\n'
+    p = os.path.join(tmp, "c.toml")
+
+    def load(local):
+        with open(p, "w") as f:
+            f.write(base + local)
+        return config_mod.load(p)
+
+    lc = load('[local]\ntype = "gpio"\nnode = 21\n').local
+    assert (lc.type, lc.chip, lc.trig, lc.echo) == ("gpio", "/dev/gpiochip0", 23, 24)
+    assert load('[local]\nport = "/dev/ttyUSB1"\nnode = 11\n').local.type == "usb"   # 書かなければ従来の USB
+    with pytest.raises(config_mod.ConfigError, match="port"):
+        load('[local]\nnode = 11\n')
+    with pytest.raises(config_mod.ConfigError, match="trig"):
+        load('[local]\ntype = "gpio"\nnode = 21\ntrig = 24\necho = 24\n')
+    with pytest.raises(config_mod.ConfigError, match="usb / gpio"):
+        load('[local]\ntype = "i2c"\nnode = 21\n')
+
+
+def test_local_gpio_in_cycle(env, monkeypatch):
+    monkeypatch.setattr(local_mod, "PING_GAP_S", 0)
+    tmp, gas, emu, _, _ = env
+    cfg = gpio_cfg(env)
+    app = App(cfg)
+    assert isinstance(app.local, local_mod.GpioSensor)
+    fake = FakeGpio([2400, 2410, 0, 2390, 2405, 2395, 50000])
+    app.local = app.poller.local = fake
+    app.radio.open()
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    r = res[LOCAL_NODE]
+    assert r.status == "OK", r.row
+    assert (r.row["n_ok"], r.row["n_try"], r.row["med_us"], r.row["min_us"], r.row["max_us"]) == \
+        (5, 7, 2400, 2390, 2410)
+    assert r.row["fw"] == "gpio" and r.row["mac"] == "LOCAL" and abs(r.row["dist_cm"] - 41.21) < 0.1
+    assert res[0].status == "OK"   # XBee の子機はこれまでどおり
+    # 全部範囲外なら NO_ECHO
+    fake.samples = [0] * 7
+    assert app.poller.poll_local().status == "NO_ECHO"
+    app.radio.close()
+
+
+def test_local_gpio_open_failure_and_recovery(env, monkeypatch):
+    monkeypatch.setattr(local_mod, "PING_GAP_S", 0)
+    app = App(gpio_cfg(env))
+    fake = FakeGpio([3000] * 7, fail_open=True)
+    app.local = app.poller.local = fake
+    app.radio.open()
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    assert res[LOCAL_NODE].status == "PORT_ERR" and "GPIO" in res[LOCAL_NODE].row["raw"]
+    assert res[0].status == "OK" and app.poller.fatal is None
+    fake.fail_open = False
+    assert app.poller.poll_local().status == "OK" and app.poller.local_error is None
+    app.radio.close()
+
+
+def test_gpio_sensor_without_device_is_port_error():
+    # 実機でない環境(gpiod がない、またはチップがない)では open が LocalSensorError になる
+    s = local_mod.GpioSensor("/dev/no-such-gpiochip", 23, 24)
+    with pytest.raises(local_mod.LocalSensorError):
+        s.open()
+    assert not s.is_open

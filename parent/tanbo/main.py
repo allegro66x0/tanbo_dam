@@ -13,7 +13,7 @@ from typing import Any
 
 from . import __version__, config as config_mod, sysinfo
 from .control import ControlServer
-from .local import LocalSensor
+from .local import GpioSensor, LocalSensor
 from .poller import Poller
 from .radio import XBeeRadio
 from .store import Store
@@ -55,7 +55,11 @@ class App:
         self.cfg = cfg
         self.store = Store(cfg.storage.db_path)
         self.radio = radio or XBeeRadio(cfg.xbee.port, cfg.xbee.baud)
-        self.local = LocalSensor(cfg.local.port, cfg.local.baud) if cfg.local else None
+        self.local = None
+        if cfg.local is not None and cfg.local.type == "gpio":
+            self.local = GpioSensor(cfg.local.chip, cfg.local.trig, cfg.local.echo)
+        elif cfg.local is not None:
+            self.local = LocalSensor(cfg.local.port, cfg.local.baud)
         self.uploader = Uploader(cfg, self.store, __version__)
         self.poller = Poller(cfg, self.radio, self.store, self._health_extra, self.local)
         self.control = ControlServer(cfg.control.socket, self)
