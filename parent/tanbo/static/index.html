@@ -649,6 +649,8 @@ function renderParent() {
     kv.push(["時計の同期", svc.clock_synced ? "済み" : svc.clock_synced === false ? "未同期" : "不明"]);
     kv.push(["親機 XBee", svc.radio_open ? (svc.local_mac || "接続中") : "開けていません"]);
     if (svc.local_node != null) kv.push([`親機の地点のセンサ(ノード ${svc.local_node})`, svc.local_open ? "接続中" : "開けていません"]);
+    if (svc.assign) kv.push([`担当(${esc(svc.parent_id || "")})`, (svc.assign.nodes.length ? svc.assign.nodes.join(", ") : "なし") +
+      (svc.assign.source === "gas" ? `(GAS の分担表、${when(svc.assign.received_ts)})` : "(初期値。分担表はまだ受け取っていない)")]);
     kv.push(["送信", svc.upload_error
       ? `${svc.upload_error_since ? when(svc.upload_error_since) + "から" : ""}失敗中: ${svc.upload_error}`
       : `最終成功 ${when(svc.upload_last_ok)}`]);

@@ -78,11 +78,12 @@ class UploadRejected(RuntimeError):
 
 
 class Uploader(threading.Thread):
-    def __init__(self, cfg: Config, store: Store, fw: str):
+    def __init__(self, cfg: Config, store: Store, fw: str, assignment=None):
         super().__init__(name="uploader", daemon=True)
         self.cfg = cfg
         self.store = store
         self.fw = fw
+        self.assignment = assignment   # GAS の応答の分担表を渡す先(assign.Assignment)
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.heartbeat = time.monotonic()
@@ -96,7 +97,8 @@ class Uploader(threading.Thread):
     def _post(self, kind: str, rows: list[dict[str, Any]]) -> int:
         up = self.cfg.upload
         body = {"token": up.token, "parent_id": up.parent_id, "db_uuid": self.store.db_uuid,
-                "fw": self.fw, "kind": kind, "rows": rows}
+                "fw": self.fw, "kind": kind, "rows": rows,
+                "local_node": self.cfg.local.node if self.cfg.local else None}
         r, route = self._request_gas(body)
         r.raise_for_status()
         try:
@@ -108,6 +110,8 @@ class Uploader(threading.Thread):
         if "hwm" not in res:
             # doGet の応答({ok, version})が返った = doPost が実行されていない
             raise UploadRejected("RESP", f"応答に hwm がない ({route})")
+        if self.assignment is not None and "assign" in res:
+            self.assignment.update(res["assign"])
         return int(res["hwm"])
 
     def _request_gas(self, body: dict[str, Any]) -> tuple[requests.Response, str]:

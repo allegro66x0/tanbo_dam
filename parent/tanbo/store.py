@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 MEAS_COLS = [
     "cycle_ts", "ts", "synced", "boot_id", "node", "mac", "status", "seq",
@@ -122,6 +122,15 @@ class Store:
                 "(SELECT node, MAX(id) AS mid FROM measurements GROUP BY node) x "
                 "ON m.id = x.mid ORDER BY m.node")
             return [dict(r) for r in cur.fetchall()]
+
+    def get_meta(self, key: str) -> Optional[str]:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return None if row is None else row[0]
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
 
     def prune(self, retain_days: int) -> int:
         cutoff = time.time() - retain_days * 86400

@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from . import __version__, config as config_mod, sysinfo
+from .assign import Assignment
 from .control import ControlServer
 from .local import GpioSensor, LocalSensor
 from .poller import Poller
@@ -60,8 +61,10 @@ class App:
             self.local = GpioSensor(cfg.local.chip, cfg.local.trig, cfg.local.echo)
         elif cfg.local is not None:
             self.local = LocalSensor(cfg.local.port, cfg.local.baud)
-        self.uploader = Uploader(cfg, self.store, __version__)
-        self.poller = Poller(cfg, self.radio, self.store, self._health_extra, self.local)
+        self.assignment = Assignment(cfg, self.store)
+        self.uploader = Uploader(cfg, self.store, __version__, self.assignment)
+        self.poller = Poller(cfg, self.radio, self.store, self._health_extra, self.local,
+                             self.assignment)
         self.control = ControlServer(cfg.control.socket, self)
         self.stopping = False
 
@@ -96,6 +99,9 @@ class App:
                 "local_node": self.cfg.local.node if self.cfg.local else None,
                 "local_open": self.local.is_open if self.local else None,
                 "local_error": self.poller.local_error,
+                # 分担表: source = gas(受け取った表)/ initial(まだ受け取っていない)、nodes = XBee で測るノード
+                "parent_id": self.cfg.upload.parent_id,
+                "assign": self.assignment.status(),
                 "last_cycle": self.poller.last_cycle,
                 "latest": [{k: r[k] for k in ("node", "ts", "status", "dist_cm", "med_us",
                                                "n_ok", "n_try", "fw", "tx_status", "rtt_ms")}

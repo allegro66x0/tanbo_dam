@@ -179,13 +179,19 @@ class WebApp:
             res["service_error"] = "制御ソケットに接続する権限がありません"
         except Exception as e:
             res["service_error"] = f"計測サービスから応答がありません({type(e).__name__})"
+        # 一覧に出すのは、この親機が測るノード(分担表の担当 + 親機の地点)。サービスが止まっていれば設定の全部
+        ids = self.cfg.node_ids()
+        assign = (res["service"] or {}).get("assign")
+        if assign is not None:
+            ids = sorted(set(assign.get("nodes") or []) |
+                         ({self.cfg.local.node} if self.cfg.local else set()))
         try:
-            res["nodes"] = self.db.nodes(self.cfg.node_ids())
+            res["nodes"] = self.db.nodes(ids)
             res["health"] = self.db.health()
         except sqlite3.Error as e:
             res["db_error"] = f"データベースを読めません: {e}"
             res["nodes"] = [{"node": n, "last": None, "last_ok_ts": None, "last_ok_dist": None,
-                             "fails": 0} for n in self.cfg.node_ids()]
+                             "fails": 0} for n in ids]
         return res
 
     def command(self, cmd: str, args: dict[str, Any]) -> tuple[int, Any]:

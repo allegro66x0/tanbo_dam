@@ -106,10 +106,12 @@ def summarize_failures(results: list["PollResult"]) -> str:
 
 class Poller(threading.Thread):
     def __init__(self, cfg: Config, radio, store: Store,
-                 health_extra: Optional[Callable[[], dict[str, Any]]] = None, local=None):
+                 health_extra: Optional[Callable[[], dict[str, Any]]] = None, local=None,
+                 assignment=None):
         super().__init__(name="poller", daemon=True)
         self.cfg = cfg
         self.radio = radio
+        self.assignment = assignment   # assign.Assignment(None なら [nodes] 全部を測る)
         self.local = local   # LocalSensor([local] がなければ None)
         self.local_error: Optional[str] = None
         self._local_warned_at = -1e9
@@ -358,7 +360,9 @@ class Poller(threading.Thread):
         if radio_ok:
             self._drain_events()
 
-        for node, mac in self.cfg.nodes.items():
+        nodes = self.assignment.my_nodes() if self.assignment is not None else list(self.cfg.nodes)
+        for node in nodes:
+            mac = self.cfg.nodes[node]
             if self.stop_event.is_set():
                 break
             if radio_ok and mac == self.radio.local_mac:

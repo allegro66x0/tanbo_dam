@@ -82,6 +82,12 @@ class WebCfg:
 
 
 @dataclass
+class AssignCfg:
+    """GAS の分担表を一度も受け取っていないときに測るノード(None なら [nodes] 全部)。"""
+    initial: Optional[list[int]] = None
+
+
+@dataclass
 class Config:
     xbee: XBeeCfg
     upload: UploadCfg
@@ -90,6 +96,7 @@ class Config:
     health: HealthCfg = field(default_factory=HealthCfg)
     control: ControlCfg = field(default_factory=ControlCfg)
     web: WebCfg = field(default_factory=WebCfg)
+    assign: AssignCfg = field(default_factory=AssignCfg)
     nodes: dict[int, str] = field(default_factory=dict)   # node -> MAC(大文字16桁)
     local: Optional[LocalCfg] = None
 
@@ -135,6 +142,7 @@ def load(path: str | Path) -> Config:
         health=_section(raw, "health", HealthCfg),
         control=_section(raw, "control", ControlCfg),
         web=_section(raw, "web", WebCfg),
+        assign=_section(raw, "assign", AssignCfg),
     )
     if raw.get("local") is not None:
         cfg.local = _section(raw, "local", LocalCfg)
@@ -168,6 +176,13 @@ def load(path: str | Path) -> Config:
             if cfg.local.trig == cfg.local.echo or not all(
                     0 <= p <= 27 for p in (cfg.local.trig, cfg.local.echo)):
                 raise ConfigError("local.trig / echo は別々の BCM 番号(0〜27)")
+    init = cfg.assign.initial
+    if init is not None:
+        if not isinstance(init, list) or not all(isinstance(n, int) for n in init):
+            raise ConfigError("assign.initial はノード番号の配列")
+        unknown = [n for n in init if n not in cfg.nodes]
+        if unknown:
+            raise ConfigError(f"assign.initial のノード {unknown} が [nodes] にありません")
     if not 1 <= cfg.web.port <= 65535:
         raise ConfigError("web.port は 1〜65535")
     if cfg.health.modem not in ("none", "mmcli"):

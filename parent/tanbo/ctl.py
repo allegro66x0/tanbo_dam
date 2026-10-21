@@ -27,6 +27,11 @@ def _print_status(s: dict) -> None:
     if s.get("local_node") is not None:
         print(f"親機の地点のセンサ ノード {s['local_node']}  {'OK' if s['local_open'] else 'NG'}"
               f"{'  ' + s['local_error'] if s.get('local_error') else ''}")
+    a = s.get("assign")
+    if a:
+        src = (f"GAS の分担表({fmt_ts(a['received_ts'])} 受信)" if a["source"] == "gas"
+               else "初期値(分担表をまだ受け取っていない)")
+        print(f"{s.get('parent_id', '')} の担当 {a['nodes']}  {src}")
     lc = s.get("last_cycle") or {}
     if lc:
         print(f"前回サイクル {fmt_ts(lc['cycle_ts'])}  {lc['n_ok']}/{lc['n_nodes']} OK  "

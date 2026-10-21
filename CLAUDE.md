@@ -11,7 +11,8 @@
 - `parent/` 親機(Raspberry Pi 4、Python 3.11+)。パッケージ `tanbo`、systemd サービス `tanbo-parent`、操作 CLI `tanboctl`
   - poller.py: 壁時計に揃えた周期で全ノードへ `REQ,<seq>` → seq 一致の応答だけ採用
   - store.py: SQLite(WAL)に先に書く store-and-forward
-  - uploader.py: 未送信をまとめて GAS へ POST、返ってきた hwm まで送信済みにする
+  - uploader.py: 未送信をまとめて GAS へ POST、返ってきた hwm まで送信済みにする。応答の分担表を assign へ渡す
+  - assign.py: GAS の分担表(ノード → 担当親機)。自分の担当だけを測る。SQLite に保存し、受け取るまでは `[assign] initial`
   - radio.py: digi-xbee、送信は非同期、Transmit Status と受信をイベントキューへ
   - local.py: 親機の地点のセンサ。設定 `[local]`。`type = "usb"`(既定)は USB の ESP32(子機と同じファーム、USB 上で同じ REQ / D2)、
     `type = "gpio"` は GPIO 直結の HC-SR04(libgpiod のエッジイベントでパルス幅、子機と同じ測り方)
@@ -31,7 +32,10 @@
 - deep sleep は見送り(子機は常時起動、親機からのポーリング)
 - 親機の地点の水位は、p3 は USB でつないだ ESP32 + HC-SR04(子機と同じファーム)、par2 は GPIO に直結した HC-SR04
   (ピン 2/16/18/20、ECHO は 10k/20k で分圧)で測る。ノード番号は `[local] node`
-- 親機の操作はローカルの操作画面を Tailscale 経由でスマホから開いて行う。GAS からの操作はしない(GAS は受信専用)
+- 親機の操作はローカルの操作画面を Tailscale 経由でスマホから開いて行う
+- GAS は受信に加えて**分担表(どの親機がどのノードを測るか)だけ**を応答で返す。それ以外の命令は送らない・親機も受け付けない(2026-10-21 決定)。
+  親機が 30 分途絶えたら GAS がその担当(親機の地点のノードを除く)を動いている親機へ移す。**戻すのは手動**(「分担」シートを書き換える)
+- 親機は parent_id で区別する: p3 = parent-1、par2 = parent-2。親機の地点のノード番号はその親機の XBee の番号(p3 = 11、par2 = 10)
 
 ## テスト
 

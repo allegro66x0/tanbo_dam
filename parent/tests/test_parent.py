@@ -45,6 +45,7 @@ class FakeGas:
         # echo:   本物の GAS と同じく POST /exec → 302 → GET /macros/echo で結果
         # hop:    その前に /exec → /exec2 の転送が1回挟まる(requests 任せだと GET /exec2 = doGet になる)
         self.mode = "direct"
+        self.assign = None   # dict にすると応答に分担表を入れる(GAS の「分担」シート相当)
         self._echo: dict[str, bytes] = {}
         gas = self
 
@@ -98,6 +99,8 @@ class FakeGas:
                         h = max(r["id"] for r in new)
                     gas.hwm[key] = h
                     out = {"ok": True, "hwm": h, "added": len(new)}
+                    if gas.assign is not None:
+                        out["assign"] = gas.assign
                 data = json.dumps(out).encode()
                 if gas.mode in ("echo", "hop"):
                     k = str(len(gas.requests))
@@ -655,3 +658,68 @@ def test_gpio_sensor_without_device_is_port_error():
     with pytest.raises(local_mod.LocalSensorError):
         s.open()
     assert not s.is_open
+
+
+# ---------------------------------------------------------------- 分担表(GAS が返す、親機 2 台)
+def polled(res):
+    return sorted(r.node for r in res)
+
+
+def test_assign_initial_then_table_from_gas(env):
+    tmp, gas, emu, _, _ = env
+    cfg = make_cfg(tmp, emu.port, gas.url, {n: MACS[n] for n in range(7)},
+                   extra="[assign]\ninitial = [0, 1]\n")
+    app = App(cfg)
+    app.radio.open()
+    # 分担表を受け取るまでは initial だけ
+    assert polled(app.poller.run_cycle(time.time())) == [0, 1]
+    assert app.handle_control("status", {})["assign"]["source"] == "initial"
+    # GAS が分担表を返す(他の親機の担当・知らないノード・壊れた値は自分では測らない)
+    gas.assign = {"0": "parent-1", "5": "parent-1", "2": "parent-2", "99": "parent-1", "x": "parent-1"}
+    app.uploader.upload_once()
+    assert gas.requests[-1]["local_node"] is None
+    assert polled(app.poller.run_cycle(time.time())) == [0, 5]
+    st = app.handle_control("status", {})["assign"]
+    assert st["source"] == "gas" and st["nodes"] == [0, 5] and st["received_ts"]
+    # 形の壊れた応答は無視して、前の表を使い続ける
+    gas.assign = ["not", "a", "dict"]
+    app.uploader.upload_once()
+    assert app.assignment.my_nodes() == [0, 5]
+    app.radio.close()
+    app.store.close()
+    # 再起動しても、回線がなくても、最後に受け取った表で測る
+    app2 = App(cfg)
+    assert app2.assignment.my_nodes() == [0, 5]
+    assert app2.handle_control("status", {})["assign"]["source"] == "gas"
+    app2.radio.close()
+
+
+def test_assign_never_moves_local_node(env, usb):
+    tmp, gas, emu, _, _ = env
+    dev = usb("v2")
+    app = App(local_cfg(env, dev.port))
+    app.radio.open()
+    gas.assign = {"0": "parent-1", str(LOCAL_NODE): "parent-2"}   # 地点のノードが他の親機になっていても
+    app.poller.run_cycle(time.time())   # 送るものがないと POST しない(= 分担表も来ない)ので、先に 1 サイクル
+    app.uploader.upload_once()
+    res = app.poller.run_cycle(time.time())
+    assert polled(res) == [0, LOCAL_NODE]                        # 自分の地点は自分で測る
+    assert gas.requests[-1]["local_node"] == LOCAL_NODE
+    app.radio.close()
+    app.local.close()
+
+
+def test_assign_without_section_polls_all(env):
+    tmp, gas, emu, cfg, _ = env
+    app = App(cfg)
+    app.radio.open()
+    assert polled(app.poller.run_cycle(time.time())) == list(range(7))   # 従来どおり
+    app.radio.close()
+
+
+def test_assign_config_validation(env):
+    tmp, gas, emu, _, _ = env
+    with pytest.raises(config_mod.ConfigError, match="assign.initial"):
+        make_cfg(tmp, emu.port, gas.url, {0: MACS[0]}, extra="[assign]\ninitial = [0, 9]\n")
+    with pytest.raises(config_mod.ConfigError, match="assign.initial"):
+        make_cfg(tmp, emu.port, gas.url, {0: MACS[0]}, extra='[assign]\ninitial = "0"\n')

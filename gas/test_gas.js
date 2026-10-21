@@ -42,6 +42,7 @@ function makeEnv() {
       return new Range(this, r, c, nr || 1, nc || 1);
     }
     getLastRow() { return this.data.length; }
+    getLastColumn() { return this.data.reduce((m, r) => Math.max(m, (r || []).length), 0); }
     getMaxRows() { return this.maxRows; }
     insertRowsAfter(_, n) { this.maxRows += n; }
     setFrozenRows() {}
@@ -68,6 +69,7 @@ function makeEnv() {
       getScriptProperties: () => ({
         getProperty: (k) => (k in props ? props[k] : null),
         setProperty: (k, v) => { props[k] = String(v); },
+        getProperties: () => ({ ...props }),
       }),
     },
     LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) },
@@ -109,11 +111,11 @@ const payloads = JSON.parse(fs.readFileSync(__dirname + '/test_payloads.json', '
 const env = makeEnv();
 env.ctx.setup();
 assert.strictEqual(env.getTz(), 'Asia/Tokyo');
-assert.deepStrictEqual(env.order, ['最新', '親機', '説明']);          // 空のシート1は削除
+assert.deepStrictEqual(env.order, ['最新', '親機', '分担', '説明']);  // 空のシート1は削除
 assert.strictEqual(env.opened[0], '1UDnr3DmX6d8fwvJzFMTeNSNxzkm9DyW7RCXji2xLfSQ');
 assert.ok(env.sheets['説明'].data.length > 10);
 env.ctx.setup();                                                      // 2回目も安全
-assert.deepStrictEqual(env.order, ['最新', '親機', '説明']);
+assert.deepStrictEqual(env.order, ['最新', '親機', '分担', '説明']);
 const token = env.props.TOKEN;
 assert.ok(token && token.length === 32);
 
@@ -142,6 +144,7 @@ assert.strictEqual(row1[2], 0);
 assert.strictEqual(row1[3], 'OK');
 assert.strictEqual(row1[4], 60.1);
 assert.strictEqual(row1[16], 1);
+assert.strictEqual(row1[18], 'parent-1');                          // 記録した親機
 
 // 再送(同じ行)は追加されない
 const again = post(env, { ...meas, token });
@@ -190,7 +193,7 @@ assert.ok(env.sheets['data_2026-11'].getMaxRows() >= 1202);
 const health = payloads.find((p) => p.kind === 'h');
 const parent = env.sheets['親機'];
 assert.strictEqual(parent.data[1][0], '最終ハートビート');
-env.props.last_health_ts = String(Date.now() / 1000 - 3600);
+env.props['hb_parent-1'] = String(Date.now() / 1000 - 3600);
 env.ctx.checkStale();
 env.ctx.checkStale();
 assert.strictEqual(env.mails.length, 1);
@@ -202,9 +205,81 @@ assert.ok(env.mails[1][1].includes('復旧'));
 
 assert.strictEqual(JSON.parse(env.ctx.doGet().body).ok, true);
 // 月別シートは説明シートの後ろに並ぶ
-assert.deepStrictEqual(env.order.slice(0, 3), ['最新', '親機', '説明']);
+assert.deepStrictEqual(env.order.slice(0, 4), ['最新', '親機', '分担', '説明']);
 // SPREADSHEET_ID プロパティで書き込み先を上書きできる
 env.props.SPREADSHEET_ID = 'other';
 post(env, { ...health, token, rows: [{ ...health.rows[0], id: 100, ts: Date.now() / 1000 }] });
 assert.strictEqual(env.opened[env.opened.length - 1], 'other');
+
+// ---------------------------------------------------------------- 分担表(親機 2 台)
+{
+  const e = makeEnv();
+  e.ctx.setup();
+  const tok = e.props.TOKEN;
+  const assignSh = e.sheets['分担'];
+  assert.deepStrictEqual(assignSh.data.slice(1).map((r) => [r[0], r[1]]),
+    [[2, 'parent-1'], [4, 'parent-1'], [10, 'parent-2'], [11, 'parent-1']]);
+  const now = Date.now() / 1000;
+  const hrow = (id, ts) => ({ ...health.rows[0], id, ts });
+  // 応答には毎回分担表が入る
+  const a1 = post(e, { ...health, token: tok, parent_id: 'parent-1', local_node: 11, db_uuid: 'aaaa0001', rows: [hrow(1, now)] });
+  assert.deepStrictEqual(a1.assign, { 2: 'parent-1', 4: 'parent-1', 10: 'parent-2', 11: 'parent-1' });
+  const a2 = post(e, { ...health, token: tok, parent_id: 'parent-2', local_node: 10, db_uuid: 'bbbb0001', rows: [hrow(1, now)] });
+  assert.deepStrictEqual(a2.assign, a1.assign);
+  assert.strictEqual(e.props.local_parent_1, undefined);
+  assert.strictEqual(e.props['local_parent-1'], '11');
+  assert.strictEqual(post(e, { ...health, token: tok, parent_id: 'bad id!', rows: [] }).error, 'bad parent_id');
+  // 親機シートは親機ごとに 1 列
+  const ps = e.sheets['親機'];
+  assert.deepStrictEqual(ps.data[0].slice(0, 3), ['項目', 'parent-1', 'parent-2']);
+  assert.ok(ps.data[1][1] instanceof Date && ps.data[1][2] instanceof Date);
+  // 手で書き換えた分担はそのまま返る
+  assignSh.data[1][1] = 'parent-2';
+  assert.strictEqual(post(e, { ...health, token: tok, parent_id: 'parent-2', db_uuid: 'bbbb0001', rows: [] }).assign['2'], 'parent-2');
+  assignSh.data[1][1] = 'parent-1';
+
+  // parent-1 が 60 分途絶 → 地点(11)以外の担当を parent-2 へ。メール 1 通(移した)+ 途絶 1 通
+  e.props['hb_parent-1'] = String(now - 3600);
+  e.ctx.checkStale();
+  assert.deepStrictEqual(assignSh.data.slice(1).map((r) => [r[0], r[1]]),
+    [[2, 'parent-2'], [4, 'parent-2'], [10, 'parent-2'], [11, 'parent-1']]);
+  assert.ok(String(assignSh.data[1][3]).startsWith('自動: parent-1 途絶'));
+  assert.ok(e.mails.some((m) => m[1].includes('parent-1 の担当を parent-2 に移しました')));
+  assert.ok(e.mails.some((m) => m[1].includes('parent-1 からの送信が途絶えています')));
+  const nMails = e.mails.length;
+  e.ctx.checkStale();                                    // 2 回目は何もしない
+  assert.strictEqual(e.mails.length, nMails);
+  // parent-1 が戻っても、担当は自動では戻らない
+  post(e, { ...health, token: tok, parent_id: 'parent-1', db_uuid: 'aaaa0001', rows: [hrow(2, Date.now() / 1000)] });
+  e.ctx.checkStale();
+  assert.strictEqual(assignSh.data[1][1], 'parent-2');
+  assert.ok(e.mails[e.mails.length - 1][1].includes('parent-1 からの送信が復旧しました'));
+  assert.strictEqual(e.props['failover_parent-1'], '0');
+
+  // 動いている親機がいなければ移さない
+  const f = makeEnv();
+  f.ctx.setup();
+  f.props['hb_parent-1'] = String(now - 3600);
+  f.ctx.checkStale();
+  assert.strictEqual(f.sheets['分担'].data[1][1], 'parent-1');
+
+  // 列を足す前に作った月別シートには、見出しだけ足す
+  const g = makeEnv();
+  g.ctx.setup();
+  const month2 = g.ctx.Utilities.formatDate(new Date(meas.rows[0].ts * 1000), 'Asia/Tokyo', 'yyyy-MM');
+  const old = g.ctx.SpreadsheetApp.openById('x').insertSheet('data_' + month2);
+  old.data.push(['Timestamp', 'CycleTime', 'Node', 'Status', 'Dist20_cm', 'EchoMed_us', 'EchoMin_us',
+    'EchoMax_us', 'Valid', 'Tries', 'Seq', 'TxStatus', 'RTT_ms', 'ChildUptime_s', 'FW',
+    'ClockSynced', 'ParentRowId', 'Raw']);
+  old.data.push(['x']);
+  post(g, { ...meas, token: g.props.TOKEN });
+  assert.strictEqual(old.data[0][18], 'Parent');
+  assert.strictEqual(old.data[1][0], 'x');
+  assert.strictEqual(old.data[2][18], 'parent-1');
+  // 旧形式の親機シート(項目 / 値)は parent-1 の列として引き継ぐ
+  const ps2 = g.sheets['親機'];
+  ps2.data[0] = ['項目', '値'];
+  post(g, { ...health, token: g.props.TOKEN, parent_id: 'parent-2', db_uuid: 'cccc0001', rows: [hrow(1, now)] });
+  assert.deepStrictEqual(ps2.data[0].slice(0, 3), ['項目', 'parent-1', 'parent-2']);
+}
 console.log('GAS tests passed');
