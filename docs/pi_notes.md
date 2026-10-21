@@ -680,3 +680,12 @@ sudo systemctl daemon-reload && sudo systemctl restart tanbo-parent && sudo syst
 - node 1 を遠隔 AT で JV=0 に。コーディネータ・par2 の両方から 3 回ずつ → それぞれ自分の REQ の応答を受け取った(7/7、fw 2.2.1)
 - xbee_lab.py の setup(コーディネータ・ルータとも)で NJ=FF を書くようにした。**p3 の XBee 11 も NJ=FE なので、p3 が戻ったら NJ=FF にする**
   (でないと、p3 の起動から 4 分以降に電源を入れた・足した子機が入れない。JV=0 で前のネットワークを覚えている子機は関係ない)
+
+## 2026-10-21 par2 の USB 通信端末(チャット側 Claude)
+
+- 新しく開通した USB 通信端末を par2 に挿した。Unisoc 製(1782:4d27、RNDIS のテザリング型)。`usb0` として認識され、DHCP で 192.168.100.2
+- p3 と同じく、NetworkManager の `netplan-eth0` の接続設定が usb0 に当たり、**既定の経路は usb0(metric 100)が wlan0(600)より優先**
+- usb0 を指定した確認: ping 8.8.8.8 4/4(平均 41 ms)、名前解決 OK、HTTPS(script.google.com 302、google.com 204)、1 MB を 1.03 秒(約 7.7 Mbps)、
+  Tailscale は UDP が通る(最寄り DERP は東京)
+- 研究室でも通信はすべて端末側を通る(SIM のデータ量を使う)。優先順位はこのまま(設置場所では端末だけを使う方針、10-06 に p3 で決定)
+- 未確認: par2 を再起動したあとも同じように usb0 が使えるか
