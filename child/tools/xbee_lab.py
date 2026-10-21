@@ -95,15 +95,18 @@ def cmd_setup(a):
     d = open_dev(a.port)
     try:
         print("MAC", str(d.get_64bit_addr()))
-        print("before", read_params(d.get_parameter, ["CE", "AP", "ID", "JV"]))
+        print("before", read_params(d.get_parameter, ["CE", "AP", "ID", "JV", "NJ"]))
         d.set_parameter("ID", bytes.fromhex(a.pan.rjust(16, "0")))
         d.set_parameter("CE", b"\x01" if a.role == "coordinator" else b"\x00")
         if a.role == "router":
             d.set_parameter("JV", b"\x00")   # コーディネータが止まっている間に再起動しても、覚えているネットワークに戻る
+        # NJ=FF: いつでも参加を受け付ける。既定の FE だと電源投入後 254 秒しか受け付けず、
+        #        あとから電源を入れた子機が入れなかった(node 1、2026-10-21)
+        d.set_parameter("NJ", b"\xff")
         d.set_parameter("AP", b"\x01")       # 親機側は API モード(tanbo と digi-xbee が前提)
         d.write_changes()
         d.apply_changes()
-        print("after ", read_params(d.get_parameter, ["CE", "AP", "ID", "JV"]))
+        print("after ", read_params(d.get_parameter, ["CE", "AP", "ID", "JV", "NJ"]))
         print("ネットワークの形成/参加に数十秒かかる。info で AI = 00 になるまで待つ")
     finally:
         d.close()
