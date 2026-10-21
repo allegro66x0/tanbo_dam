@@ -22,7 +22,7 @@
 
 #include <Arduino.h>
 
-#define FW_VERSION "2.2.0"
+#define FW_VERSION "2.2.1"
 
 #define TRIG_PIN 4
 #define ECHO_PIN 18
@@ -201,17 +201,24 @@ void api_send(const uint8_t *dest64, const uint8_t *dest16, const char *payload)
 
 void handle_api_frame(const uint8_t *d, size_t len) {
   if (len < 1) return;
-  if (d[0] != 0x90) {   // 0x90 Receive Packet 以外(Modem Status など)は読み捨てる
+  // 受信フレームは XBee の AO で形が変わる: AO=0 は 0x90 Receive Packet、AO=1 は 0x91 Explicit Rx Indicator
+  // (エンドポイント・クラスタ・プロファイルの 6 バイトが増える)。どちらも送り主の 64bit/16bit は同じ位置
+  size_t data_off;
+  if (d[0] == 0x90) {
+    data_off = 12;
+  } else if (d[0] == 0x91) {
+    data_off = 18;
+  } else {   // Modem Status などは読み捨てる
     Serial.printf("[api] frame 0x%02X (%u bytes) ignored\n", d[0], (unsigned)len);
     return;
   }
-  if (len < 12) return;
+  if (len < data_off) return;
   const uint8_t *src64 = d + 1;
   const uint8_t *src16 = d + 9;
   char text[RX_LINE_MAX + 1];
-  size_t n = len - 12;
+  size_t n = len - data_off;
   if (n > RX_LINE_MAX) n = RX_LINE_MAX;
-  memcpy(text, d + 12, n);
+  memcpy(text, d + data_off, n);
   text[n] = '\0';
   const char *s = strip(text, n);
 

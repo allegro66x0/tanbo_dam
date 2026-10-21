@@ -90,7 +90,7 @@ int main() {
     CHECK(p.data[10] == 0x12 && p.data[11] == 0x34);            // 16bit も送り主
     std::string payload(p.data.begin() + 14, p.data.end());
     CHECK(payload.rfind("D2,77,7,7,2900,", 0) == 0);
-    CHECK(payload.find("2.2.0\n") != std::string::npos);
+    CHECK(payload.find(FW_VERSION "\n") != std::string::npos);
     CHECK(Serial2.out.size() == 4 + p.data.size());             // 余計なバイトがない
   }
 
@@ -172,6 +172,25 @@ int main() {
     CHECK(payload.rfind("D2,8,0,7,-1,-1,-1,", 0) == 0);
   }
   g_echo_us = 2900;
+
+  // 10. AO=1 の XBee は 0x91 Explicit Rx Indicator で渡す(node 0 で実機で発生)。これにも送り主へ返す
+  reset_io();
+  {
+    std::vector<uint8_t> d = {0x91};
+    d.insert(d.end(), SRC64, SRC64 + 8);
+    d.insert(d.end(), {0x12, 0x34, 0xE8, 0xE8, 0x00, 0x11, 0xC1, 0x05, 0x01});   // 16bit、EP×2、クラスタ、プロファイル、オプション
+    std::string req = "REQ,321\n";
+    d.insert(d.end(), req.begin(), req.end());
+    Serial2.feed(frame(d));
+  }
+  run();
+  {
+    Parsed p = parse_frame(Serial2.out);
+    CHECK(p.ok && p.type == 0x10);
+    CHECK(p.data.size() > 14 && memcmp(p.data.data() + 2, SRC64, 8) == 0);
+    std::string payload(p.data.begin() + 14, p.data.end());
+    CHECK(payload.rfind("D2,321,7,7,2900,", 0) == 0);
+  }
 
   if (failures) {
     std::cerr << failures << " failure(s)" << std::endl;

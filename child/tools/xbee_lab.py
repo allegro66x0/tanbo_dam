@@ -12,7 +12,7 @@
   python xbee_lab.py req    --port P --mac <子機の MAC> [--count 3]  # 1 台から送って受ける
   python xbee_lab.py child-setup --port P [--ni 名前] [--dry-run]   # USB アダプタに挿した XBee を子機用に設定する
 
-child-setup: ID=1114、CE=0(ルータ)、JV=1、AP=1(API)、DH/DL=0、BD=3(9600)、NI=node<番号> に書き換えて保存する。
+child-setup: ID=1114、CE=0(ルータ)、JV=0、AP=1(API)、AO=0(受信は 0x90)、DH/DL=0、BD=3(9600)、NI=node<番号> に書き換えて保存する。
 今が透過モード(AP=0)でも API モードでも書ける(透過なら +++ のコマンドモード、API なら AT フレーム)。
 AP=1 の子機は、ESP32 のファームが v2.2.0 以降でないと応答できない。
 
@@ -32,11 +32,14 @@ from digi.xbee.models.address import XBee64BitAddress
 
 BAUD = 9600
 LOCAL_PARAMS = ["NI", "CE", "AP", "ID", "OP", "OI", "CH", "AI", "JV", "NJ", "DH", "DL", "BD", "VR"]
-REMOTE_PARAMS = ["NI", "CE", "AP", "ID", "OP", "CH", "AI", "DH", "DL", "JV"]
+REMOTE_PARAMS = ["NI", "CE", "AP", "AO", "ID", "OP", "CH", "AI", "DH", "DL", "JV"]
 
 # 子機用の設定(AT コマンド名, 値の 16 進文字列)。AP は最後に書く(透過モードのコマンドモード中に API へ切り替わらないように)
-CHILD_SETTINGS = [("ID", "1114"), ("CE", "0"), ("JV", "1"), ("DH", "0"), ("DL", "0"), ("BD", "3"), ("AP", "1")]
-CHILD_READ = ["SH", "SL", "NI", "CE", "AP", "ID", "JV", "DH", "DL", "BD", "VR"]
+# AO=0: 受信を 0x90(Receive Packet)で出す。AO=1 だと 0x91(Explicit)になり、v2.2.0 のファームが読まなかった(node 0、2026-10-21)
+# JV=0: 起動時にコーディネータを探さず、覚えているネットワークに戻る。JV=1 だとコーディネータ(p3)が止まっている間に
+#       電源が入り直した子機がネットワークを抜けて戻れなかった(2026-10-21 に研究室で確認)
+CHILD_SETTINGS = [("ID", "1114"), ("CE", "0"), ("JV", "0"), ("DH", "0"), ("DL", "0"), ("BD", "3"), ("AO", "0"), ("AP", "1")]
+CHILD_READ = ["SH", "SL", "NI", "CE", "AP", "AO", "ID", "JV", "DH", "DL", "BD", "VR"]
 
 # ノード番号と XBee の 64bit アドレス(tanbo_moc/xbee_ID.xlsx)
 NODE_MACS = {
@@ -96,7 +99,7 @@ def cmd_setup(a):
         d.set_parameter("ID", bytes.fromhex(a.pan.rjust(16, "0")))
         d.set_parameter("CE", b"\x01" if a.role == "coordinator" else b"\x00")
         if a.role == "router":
-            d.set_parameter("JV", b"\x01")   # 起動時にコーディネータを探してネットワークに入り直す
+            d.set_parameter("JV", b"\x00")   # コーディネータが止まっている間に再起動しても、覚えているネットワークに戻る
         d.set_parameter("AP", b"\x01")       # 親機側は API モード(tanbo と digi-xbee が前提)
         d.write_changes()
         d.apply_changes()
