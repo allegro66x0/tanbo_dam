@@ -26,19 +26,40 @@ function makeEnv() {
       const out = [];
       for (let i = 0; i < this.nr; i++) {
         const row = this.sh.data[this.r + i - 1] || [];
-        out.push(Array.from({ length: this.nc }, (_, j) => row[this.c + j - 1] ?? ''));
+        out.push(Array.from({ length: this.nc }, (_, j) => {
+          const x = row[this.c + j - 1] ?? '';
+          const fmt = this.sh.fmt[this.c + j] || '';
+          // シリアル値 → スプレッドシートのタイムゾーン(JST)の 0 時の Date
+          return (typeof x === 'number' && fmt.includes('yyyy'))
+            ? new Date(Date.UTC(1899, 11, 30) + x * 86400000 - 9 * 3600000) : x;
+        }));
       }
       return out;
     }
-    setNumberFormat() { return this; }
+    setNumberFormat(f) {
+      for (let j = 0; j < this.nc; j++) this.sh.fmt[this.c + j] = f;   // 簡略化: 列ごとに 1 つの書式
+      return this;
+    }
     setFontWeight() { return this; }
+    clearContent() {
+      for (let i = 0; i < this.nr; i++) {
+        const row = this.sh.data[this.r + i - 1];
+        if (row) for (let j = 0; j < this.nc; j++) row[this.c + j - 1] = '';
+      }
+      while (this.sh.data.length && this.sh.data[this.sh.data.length - 1].every((x) => x === '')) this.sh.data.pop();
+      return this;
+    }
   }
   class Sheet {
-    constructor(name) { this.name = name; this.data = []; this.maxRows = 1000; }
+    constructor(name) { this.name = name; this.data = []; this.maxRows = 1000; this.fmt = {}; }
     getName() { return this.name; }
     clear() { this.data = []; }
     getRange(r, c, nr, nc) {
-      if (typeof r === 'string') return new Range(this, 1, 1, 1, 1);
+      if (typeof r === 'string') {   // 'A:B' のような列の指定
+        const m = r.match(/^([A-Z]):([A-Z])$/);
+        const c1 = m[1].charCodeAt(0) - 64;
+        return new Range(this, 1, c1, this.maxRows, m[2].charCodeAt(0) - 64 - c1 + 1);
+      }
       return new Range(this, r, c, nr || 1, nc || 1);
     }
     getLastRow() { return this.data.length; }
@@ -281,5 +302,42 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   ps2.data[0] = ['項目', '値'];
   post(g, { ...health, token: g.props.TOKEN, parent_id: 'parent-2', db_uuid: 'cccc0001', rows: [hrow(1, now)] });
   assert.deepStrictEqual(ps2.data[0].slice(0, 3), ['項目', 'parent-1', 'parent-2']);
+}
+
+// ---------------------------------------------------------------- Node 列に日時の書式が付いていた旧シート(v2.1 の不具合)
+{
+  const e = makeEnv();
+  e.ctx.setup();
+  const tok = e.props.TOKEN;
+  const lt = e.sheets['最新'];
+  const as = e.sheets['分担'];
+  assert.strictEqual(lt.fmt[1], '0');                    // 新しく作るシートの Node 列は数値の書式
+  assert.strictEqual(as.fmt[1], '0');
+  // 旧版の状態を作る: Node 列が日時の書式で、ノード 2 の行が 2 つある
+  lt.fmt[1] = 'yyyy-mm-dd hh:mm:ss';
+  as.fmt[1] = 'yyyy-mm-dd hh:mm:ss';
+  lt.data.push([2, 'x', 'TX_FAIL', '', '', '', '', '', 3, '', ''], [2, 'y', 'TX_FAIL', '', '', '', '', '', 5, '', '']);
+  // 日付で読めても分担表のノード番号は正しい
+  const res = post(e, { ...meas, token: tok, rows: [{ ...meas.rows[0], id: 1, node: 2, status: 'TX_FAIL' }] });
+  assert.deepStrictEqual(res.assign, { 2: 'parent-1', 4: 'parent-1', 10: 'parent-2', 11: 'parent-1' });
+  // 「最新」は 1 ノード 1 行にまとまり、連続失敗は最後の行(5)から続く
+  const rows2 = lt.data.slice(1).filter((r) => r.some((x) => x !== ''));
+  assert.strictEqual(rows2.length, 1);
+  assert.strictEqual(rows2[0][0], 2);
+  assert.strictEqual(rows2[0][8], 6);
+  // setup をもう一度走らせると書式が直る
+  e.ctx.setup();
+  assert.strictEqual(lt.fmt[1], '0');
+  assert.strictEqual(as.fmt[1], '0');
+  // 途絶時の移動も、日付で読めた Node 列のまま正しく動く
+  as.fmt[1] = 'yyyy-mm-dd hh:mm:ss';
+  const now2 = Date.now() / 1000;
+  e.props['hb_parent-1'] = String(now2 - 3600);
+  e.props['hb_parent-2'] = String(now2);
+  e.props['local_parent-1'] = '11';
+  e.ctx.checkStale();
+  as.fmt[1] = '0';
+  assert.deepStrictEqual(as.data.slice(1).map((r) => [r[0], r[1]]),
+    [[2, 'parent-2'], [4, 'parent-2'], [10, 'parent-2'], [11, 'parent-1']]);
 }
 console.log('GAS tests passed');

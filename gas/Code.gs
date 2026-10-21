@@ -23,7 +23,7 @@
  *       (実行ユーザー: 自分、アクセス: 全員)
  */
 
-const VERSION = '2.2.0';
+const VERSION = '2.2.1';
 const SPREADSHEET_ID = '1UDnr3DmX6d8fwvJzFMTeNSNxzkm9DyW7RCXji2xLfSQ';   // tambo_data2
 const TZ = 'Asia/Tokyo';
 const SHEET_LATEST = '最新';
@@ -144,6 +144,18 @@ function v_(x) {
   return (x === null || x === undefined) ? '' : x;
 }
 
+/**
+ * シートの Node 列の値をノード番号にする。日時の書式が付いたセルは getValues() で Date になる
+ * (v2.1 までは「最新」の A 列に日時の書式が付いていた)ので、シリアル値に戻す。
+ * Date はスプレッドシートのタイムゾーンの 0 時なので、±12 時間以内のずれは四捨五入で消える。
+ */
+function nodeNum_(v) {
+  if (v instanceof Date) return Math.round((v.getTime() - Date.UTC(1899, 11, 30)) / 86400000);
+  if (v === '' || v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isInteger(n) ? n : null;
+}
+
 function measRow_(r, pid) {
   return [
     toDate_(r.ts), toDate_(r.cycle_ts), r.node, r.status, v_(r.dist_cm), v_(r.med_us),
@@ -186,7 +198,11 @@ function getOrCreateSheet_(ss, name, header) {
     sh = ss.insertSheet(name);
     sh.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
     sh.setFrozenRows(1);
-    sh.getRange('A:B').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    if (header[0] === 'Timestamp') {   // 月別シートの Timestamp / CycleTime だけ日時の書式
+      sh.getRange('A:B').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    } else if (header[0] === 'Node') {
+      sh.getRange('A:A').setNumberFormat('0');
+    }
   } else if (sh.getRange(1, header.length).getValues()[0][0] === '') {
     // 列を末尾に足した版の前に作ったシート: 見出しだけ足す(既存の行はそのまま)
     sh.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
@@ -210,7 +226,13 @@ function updateLatest_(ss, rows, pid) {
   const n = Math.max(sh.getLastRow() - 1, 0);
   const cur = n ? sh.getRange(2, 1, n, LATEST_HEADER.length).getValues() : [];
   const byNode = {};
-  cur.forEach(function (row) { if (row[0] !== '') byNode[row[0]] = row; });
+  cur.forEach(function (row) {
+    const node = nodeNum_(row[0]);
+    if (node !== null) {   // 同じノードの行が重なっていたら(v2.1 の不具合)最後の行を残す
+      row[0] = node;
+      byNode[node] = row;
+    }
+  });
 
   rows.forEach(function (r) {
     const prev = byNode[r.node] || [r.node, '', '', '', '', '', '', '', 0, '', ''];
@@ -232,8 +254,12 @@ function updateLatest_(ss, rows, pid) {
   if (out.length) {
     if (out.length + 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), out.length);
     sh.getRange(2, 1, out.length, LATEST_HEADER.length).setValues(out);
+    sh.getRange(2, 1, out.length, 1).setNumberFormat('0');
     sh.getRange(2, 2, out.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
     sh.getRange(2, 7, out.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  }
+  if (n > out.length) {   // 重なっていた行をまとめた分、下に残った古い行を消す
+    sh.getRange(2 + out.length, 1, n - out.length, LATEST_HEADER.length).clearContent();
   }
 }
 
@@ -280,9 +306,9 @@ function readAssign_(ss) {
   const out = {};
   if (!sh || sh.getLastRow() < 2) return out;
   sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (row) {
-    const node = Number(row[0]);
+    const node = nodeNum_(row[0]);
     const pid = String(row[1]).trim();
-    if (row[0] !== '' && Number.isInteger(node) && pid) out[String(node)] = pid;
+    if (node !== null && pid) out[String(node)] = pid;
   });
   return out;
 }
@@ -313,7 +339,9 @@ function failover_(ss, props, dead, hbs, failoverMin) {
   const lastStr = Utilities.formatDate(new Date(hbs[dead] * 1000), TZ, 'MM-dd HH:mm');
   const moved = [];
   rows.forEach(function (row) {
-    if (String(row[1]).trim() === dead && String(row[0]) !== String(local)) {
+    const node = nodeNum_(row[0]);
+    if (node !== null) row[0] = node;
+    if (String(row[1]).trim() === dead && String(node) !== String(local)) {
       row[1] = to;
       row[2] = new Date();
       row[3] = '自動: ' + dead + ' 途絶(最終 ' + lastStr + ')→ ' + to;
@@ -400,6 +428,14 @@ function setup() {
       .setValues(INITIAL_ASSIGN.map(function (a) { return [a[0], a[1], now, a[2]]; }));
     sh.getRange(2, 3, INITIAL_ASSIGN.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
   }
+  // v2.1 までは「最新」(と v2.2.0 の「分担」)の Node 列に日時の書式が付いていた → 数値の書式に直す
+  [SHEET_LATEST, SHEET_ASSIGN].forEach(function (name) {
+    const sh = ss.getSheetByName(name);
+    if (sh) {
+      sh.getRange('A:A').setNumberFormat('0');
+      if (name === SHEET_ASSIGN) sh.getRange('B:B').setNumberFormat('@');
+    }
+  });
   writeHelp_(ss);
 
   // 作成直後の空の既定シート(シート1 / Sheet1)を片付ける
