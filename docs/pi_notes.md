@@ -670,4 +670,5 @@ sudo systemctl daemon-reload && sudo systemctl restart tanbo-parent && sudo syst
   → **起動 7 秒後から REQ 8/8 に応答**。JV=0 なら、p3 が止まっている間に子機が再起動しても par2 が測れる
 - 決定: 子機とルータの親機の XBee は JV=0。xbee_lab.py の child-setup と setup --role router を JV=0 に変更。
   代わりに、コーディネータ(XBee 11)のネットワークが作り直されると(XBee の交換・初期化でチャンネルや OI が変わると)子機は自動ではついていかない
-- 未確認: par2 の XBee 10 自体をコーディネータ不在で入れ直したときに戻れるか
+- par2 の XBee 10(JV=0)を、コーディネータ不在のまま USB アダプタごと抜き差し → AI=00・OI 0934 のまま戻り、
+  node 0 への REQ 6/6 に応答。**ルータの親機も、コーディネータ不在で再起動して戻れる**
