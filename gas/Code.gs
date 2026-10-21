@@ -23,7 +23,7 @@
  *       (実行ユーザー: 自分、アクセス: 全員)
  */
 
-const VERSION = '2.2.2';
+const VERSION = '2.2.3';
 const SPREADSHEET_ID = '1UDnr3DmX6d8fwvJzFMTeNSNxzkm9DyW7RCXji2xLfSQ';   // tambo_data2
 const TZ = 'Asia/Tokyo';
 const SHEET_LATEST = '最新';
@@ -34,8 +34,9 @@ const DEFAULT_STALE_MIN = 40;      // 親機からのハートビートがこれ
 const DEFAULT_FAILOVER_MIN = 30;   // これ以上途絶えた親機の担当を、動いている親機へ移す
 const DEFAULT_PARENT = 'parent-1';
 
-// 分担シートが無いときの初期値(setup で作る)。親機の地点のノードは、その親機に固定
+// 分担シートが無いときの初期値(setup で作る)。親機の地点のノードは、その親機に固定。担当親機が空の行はどの親機も測らない
 const INITIAL_ASSIGN = [
+  [0, '', '子機。設置場所が決まったら担当親機を書く'],
   [2, 'parent-1', '初期値'],
   [4, 'parent-1', '初期値(par2 に置き換える予定)'],
   [10, 'parent-2', '親機の地点(固定)'],
@@ -150,7 +151,7 @@ function v_(x) {
  * Date はスプレッドシートのタイムゾーンの 0 時なので、±12 時間以内のずれは四捨五入で消える。
  */
 function nodeNum_(v) {
-  if (v instanceof Date) return Math.round((v.getTime() - Date.UTC(1899, 11, 30)) / 86400000);
+  if (v instanceof Date) return Math.round((v.getTime() - Date.UTC(1899, 11, 30)) / 86400000) + 0;   // + 0: node 0 が -0 にならないように
   if (v === '' || v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isInteger(n) ? n : null;
@@ -296,9 +297,11 @@ function updateParent_(ss, h, body, pid) {
     ['時刻同期', v_(h.synced)],
     ['送信エラー', v_(h.upload_err)],
   ];
+  // 書く前に書式を決める: 最終ハートビートは日時、ほかは文字列("1/12" を日付にさせない、数値を日付で表示させない)
+  sh.getRange(2, col).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  sh.getRange(3, col, kv.length - 1, 1).setNumberFormat('@');
   sh.getRange(2, 1, kv.length, 1).setValues(kv.map(function (x) { return [x[0]]; }));
   sh.getRange(2, col, kv.length, 1).setValues(kv.map(function (x) { return [x[1]]; }));
-  sh.getRange(2, col).setNumberFormat('yyyy-mm-dd hh:mm:ss');
 }
 
 // ------------------------------------------------------------------ assignment
@@ -424,12 +427,24 @@ function setup() {
   ss.setSpreadsheetTimeZone(TZ);
   getOrCreateSheet_(ss, SHEET_LATEST, LATEST_HEADER);
   getOrCreateSheet_(ss, SHEET_PARENT, ['項目', DEFAULT_PARENT]);
-  if (!ss.getSheetByName(SHEET_ASSIGN)) {
+  {
+    // 分担: シートに無いノードの行だけ初期値で足す(既にある行は書き換えない)
     const sh = getOrCreateSheet_(ss, SHEET_ASSIGN, ASSIGN_HEADER);
-    const now = new Date();
-    sh.getRange(2, 1, INITIAL_ASSIGN.length, ASSIGN_HEADER.length)
-      .setValues(INITIAL_ASSIGN.map(function (a) { return [a[0], a[1], now, a[2]]; }));
-    sh.getRange(2, 3, INITIAL_ASSIGN.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    const have = {};
+    if (sh.getLastRow() >= 2) {
+      sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues().forEach(function (r) {
+        const n = nodeNum_(r[0]);
+        if (n !== null) have[n] = true;
+      });
+    }
+    const add = INITIAL_ASSIGN.filter(function (a) { return !have[a[0]]; });
+    if (add.length) {
+      const now = new Date();
+      const start = Math.max(sh.getLastRow(), 1) + 1;
+      sh.getRange(start, 1, add.length, ASSIGN_HEADER.length)
+        .setValues(add.map(function (a) { return [a[0], a[1], now, a[2]]; }));
+      sh.getRange(start, 3, add.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    }
   }
   // v2.1 までは新しいシートの A:B すべてに日時の書式が付いていた → 日時でない列の書式を直す
   [SHEET_LATEST, SHEET_ASSIGN].forEach(function (name) {
@@ -440,7 +455,10 @@ function setup() {
     }
   });
   const parentSh = ss.getSheetByName(SHEET_PARENT);
-  if (parentSh) parentSh.getRange('B:Z').clearFormat();   // 値の列(最終ハートビートの行は書くたびに日時の書式を付ける)
+  if (parentSh) {   // 値の列: 最終ハートビート(2 行目)は日時、ほかは文字列(書式を消すだけでは日付の表示が残った)
+    parentSh.getRange('B2:Z2').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    parentSh.getRange('B3:Z30').setNumberFormat('@');
+  }
   ss.getSheets().forEach(function (sh) {
     if (sh.getName().indexOf('health_') === 0) sh.getRange('B:B').setNumberFormat('0');   // Interval_s
   });

@@ -19,7 +19,7 @@ function makeEnv() {
         if (this.r + i > this.sh.maxRows) throw new Error('outside the dimensions of the sheet');
         this.sh.data[this.r + i - 1] = this.sh.data[this.r + i - 1] || [];
         row.forEach((x, j) => {
-          const auto = typeof x === 'string' && /^\d{1,2}\/\d{1,2}$/.test(x) && this.sh.fmt[this.c + j] !== '@';
+          const auto = typeof x === 'string' && /^\d{1,2}\/\d{1,2}$/.test(x) && this.sh.fmtOf(this.r + i, this.c + j) !== '@';
           this.sh.data[this.r + i - 1][this.c + j - 1] = auto
             ? new Date(Date.UTC(2026, Number(x.split('/')[0]) - 1, Number(x.split('/')[1])) - 9 * 3600000) : x;
         });
@@ -32,7 +32,7 @@ function makeEnv() {
         const row = this.sh.data[this.r + i - 1] || [];
         out.push(Array.from({ length: this.nc }, (_, j) => {
           const x = row[this.c + j - 1] ?? '';
-          const fmt = this.sh.fmt[this.c + j] || '';
+          const fmt = this.sh.fmtOf(this.r + i, this.c + j) || '';
           // シリアル値 → スプレッドシートのタイムゾーン(JST)の 0 時の Date
           return (typeof x === 'number' && fmt.includes('yyyy'))
             ? new Date(Date.UTC(1899, 11, 30) + x * 86400000 - 9 * 3600000) : x;
@@ -41,12 +41,19 @@ function makeEnv() {
       return out;
     }
     setNumberFormat(f) {
-      for (let j = 0; j < this.nc; j++) this.sh.fmt[this.c + j] = f;   // 簡略化: 列ごとに 1 つの書式
+      const whole = this.r === 1 && this.nr >= this.sh.maxRows;   // 'A:B' のような列全体
+      for (let j = 0; j < this.nc; j++) {
+        if (whole) this.sh.fmt[this.c + j] = f;
+        else for (let i = 0; i < this.nr; i++) this.sh.cfmt[(this.r + i) + ':' + (this.c + j)] = f;
+      }
       return this;
     }
     setFontWeight() { return this; }
     clearFormat() {
-      for (let j = 0; j < this.nc; j++) delete this.sh.fmt[this.c + j];
+      for (let j = 0; j < this.nc; j++) {
+        delete this.sh.fmt[this.c + j];
+        for (let i = 0; i < this.nr; i++) delete this.sh.cfmt[(this.r + i) + ':' + (this.c + j)];
+      }
       return this;
     }
     clearContent() {
@@ -59,14 +66,17 @@ function makeEnv() {
     }
   }
   class Sheet {
-    constructor(name) { this.name = name; this.data = []; this.maxRows = 1000; this.fmt = {}; }
+    constructor(name) { this.name = name; this.data = []; this.maxRows = 1000; this.fmt = {}; this.cfmt = {}; }
+    fmtOf(r, c) { const k = r + ':' + c; return k in this.cfmt ? this.cfmt[k] : this.fmt[c]; }
     getName() { return this.name; }
     clear() { this.data = []; }
     getRange(r, c, nr, nc) {
-      if (typeof r === 'string') {   // 'A:B' のような列の指定
-        const m = r.match(/^([A-Z]):([A-Z])$/);
+      if (typeof r === 'string') {   // 'A:B'(列全体)や 'B3:Z30'
+        const m = r.match(/^([A-Z])(\d*):([A-Z])(\d*)$/);
         const c1 = m[1].charCodeAt(0) - 64;
-        return new Range(this, 1, c1, this.maxRows, m[2].charCodeAt(0) - 64 - c1 + 1);
+        const nc2 = m[3].charCodeAt(0) - 64 - c1 + 1;
+        if (!m[2]) return new Range(this, 1, c1, this.maxRows, nc2);
+        return new Range(this, Number(m[2]), c1, Number(m[4]) - Number(m[2]) + 1, nc2);
       }
       return new Range(this, r, c, nr || 1, nc || 1);
     }
@@ -248,7 +258,7 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   const tok = e.props.TOKEN;
   const assignSh = e.sheets['分担'];
   assert.deepStrictEqual(assignSh.data.slice(1).map((r) => [r[0], r[1]]),
-    [[2, 'parent-1'], [4, 'parent-1'], [10, 'parent-2'], [11, 'parent-1']]);
+    [[0, ''], [2, 'parent-1'], [4, 'parent-1'], [10, 'parent-2'], [11, 'parent-1']]);
   const now = Date.now() / 1000;
   const hrow = (id, ts) => ({ ...health.rows[0], id, ts });
   // 応答には毎回分担表が入る
@@ -264,16 +274,16 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   assert.deepStrictEqual(ps.data[0].slice(0, 3), ['項目', 'parent-1', 'parent-2']);
   assert.ok(ps.data[1][1] instanceof Date && ps.data[1][2] instanceof Date);
   // 手で書き換えた分担はそのまま返る
-  assignSh.data[1][1] = 'parent-2';
+  assignSh.data[2][1] = 'parent-2';
   assert.strictEqual(post(e, { ...health, token: tok, parent_id: 'parent-2', db_uuid: 'bbbb0001', rows: [] }).assign['2'], 'parent-2');
-  assignSh.data[1][1] = 'parent-1';
+  assignSh.data[2][1] = 'parent-1';
 
   // parent-1 が 60 分途絶 → 地点(11)以外の担当を parent-2 へ。メール 1 通(移した)+ 途絶 1 通
   e.props['hb_parent-1'] = String(now - 3600);
   e.ctx.checkStale();
   assert.deepStrictEqual(assignSh.data.slice(1).map((r) => [r[0], r[1]]),
-    [[2, 'parent-2'], [4, 'parent-2'], [10, 'parent-2'], [11, 'parent-1']]);
-  assert.ok(String(assignSh.data[1][3]).startsWith('自動: parent-1 途絶'));
+    [[0, ''], [2, 'parent-2'], [4, 'parent-2'], [10, 'parent-2'], [11, 'parent-1']]);   // 担当が空の行は動かさない
+  assert.ok(String(assignSh.data[2][3]).startsWith('自動: parent-1 途絶'));
   assert.ok(e.mails.some((m) => m[1].includes('parent-1 の担当を parent-2 に移しました')));
   assert.ok(e.mails.some((m) => m[1].includes('parent-1 からの送信が途絶えています')));
   const nMails = e.mails.length;
@@ -282,7 +292,7 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   // parent-1 が戻っても、担当は自動では戻らない
   post(e, { ...health, token: tok, parent_id: 'parent-1', db_uuid: 'aaaa0001', rows: [hrow(2, Date.now() / 1000)] });
   e.ctx.checkStale();
-  assert.strictEqual(assignSh.data[1][1], 'parent-2');
+  assert.strictEqual(assignSh.data[2][1], 'parent-2');
   assert.ok(e.mails[e.mails.length - 1][1].includes('parent-1 からの送信が復旧しました'));
   assert.strictEqual(e.props['failover_parent-1'], '0');
 
@@ -291,7 +301,7 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   f.ctx.setup();
   f.props['hb_parent-1'] = String(now - 3600);
   f.ctx.checkStale();
-  assert.strictEqual(f.sheets['分担'].data[1][1], 'parent-1');
+  assert.strictEqual(f.sheets['分担'].data[2][1], 'parent-1');
 
   // 列を足す前に作った月別シートには、見出しだけ足す
   const g = makeEnv();
@@ -347,7 +357,7 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   e.ctx.checkStale();
   as.fmt[1] = '0';
   assert.deepStrictEqual(as.data.slice(1).map((r) => [r[0], r[1]]),
-    [[2, 'parent-2'], [4, 'parent-2'], [10, 'parent-2'], [11, 'parent-1']]);
+    [[0, ''], [2, 'parent-2'], [4, 'parent-2'], [10, 'parent-2'], [11, 'parent-1']]);
 }
 
 // ---------------------------------------------------------------- 日時でない列の書式(v2.2.2)
@@ -374,10 +384,30 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   e.sheets['親機'].fmt[2] = 'yyyy-mm-dd hh:mm:ss';
   e.ctx.setup();
   assert.strictEqual(hs.fmt[2], '0');
-  assert.strictEqual(e.sheets['親機'].fmt[2], undefined);
+  assert.strictEqual(e.sheets['親機'].fmtOf(5, 2), '@');           // 周期_s など
+  assert.ok(String(e.sheets['親機'].fmtOf(2, 2)).includes('yyyy'));  // 最終ハートビート
+  // 親機シートの "1/12"(前回サイクル OK/全体)が日付にならない
+  e.sheets['親機'].cfmt = {};   // setup で付けた書式がなくても、書き込むときに付ける
+  post(e, { ...health, token: tok, rows: [{ ...health.rows[0], id: 50, ts: Date.now() / 1000, n_ok: 1, n_nodes: 12 }] });
+  const okAll = e.sheets['親機'].data.find((r) => r[0] === '前回サイクル OK/全体');
+  assert.strictEqual(okAll[1], '1/12');
   assert.strictEqual(lt.fmt[6], '@');
   post(e, { ...meas, token: tok, rows: [{ ...meas.rows[0], id: 999, node: 99, status: 'TIMEOUT' }] });
   const fixed = lt.data.slice(1).find((r) => r[0] === okRow[0]);
   assert.strictEqual(fixed[5], '7/7');
+}
+
+// ---------------------------------------------------------------- 既存の分担シートには、無いノードの行だけ足す
+{
+  const e = makeEnv();
+  e.ctx.setup();
+  const as = e.sheets['分担'];
+  as.data = as.data.filter((r) => r[0] !== 0);          // node 0 を足す前の版で作ったシート
+  as.data[1][1] = 'parent-2';                           // 手で書き換えた担当
+  e.ctx.setup();
+  assert.deepStrictEqual(as.data.slice(1).map((r) => [r[0], r[1]]),
+    [[2, 'parent-2'], [4, 'parent-1'], [10, 'parent-2'], [11, 'parent-1'], [0, '']]);
+  e.ctx.setup();                                        // 何度実行しても増えない
+  assert.strictEqual(as.data.length, 6);
 }
 console.log('GAS tests passed');

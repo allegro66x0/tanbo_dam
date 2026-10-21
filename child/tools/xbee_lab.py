@@ -10,6 +10,11 @@
   python xbee_lab.py remote-set --port P --mac <子機の MAC> AP=01   # 無線越しに書く(WR・AC まで)
   python xbee_lab.py test   --coord P1 --router P2 --mac <子機の MAC> [--count 3]
   python xbee_lab.py req    --port P --mac <子機の MAC> [--count 3]  # 1 台から送って受ける
+  python xbee_lab.py child-setup --port P [--ni 名前] [--dry-run]   # USB アダプタに挿した XBee を子機用に設定する
+
+child-setup: ID=1114、CE=0(ルータ)、JV=1、AP=1(API)、DH/DL=0、BD=3(9600)、NI=node<番号> に書き換えて保存する。
+今が透過モード(AP=0)でも API モードでも書ける(透過なら +++ のコマンドモード、API なら AT フレーム)。
+AP=1 の子機は、ESP32 のファームが v2.2.0 以降でないと応答できない。
 
 test で確かめること:
   1. コーディネータから REQ → 応答がコーディネータに届く(基準)
@@ -28,6 +33,19 @@ from digi.xbee.models.address import XBee64BitAddress
 BAUD = 9600
 LOCAL_PARAMS = ["NI", "CE", "AP", "ID", "OP", "OI", "CH", "AI", "JV", "NJ", "DH", "DL", "BD", "VR"]
 REMOTE_PARAMS = ["NI", "CE", "AP", "ID", "OP", "CH", "AI", "DH", "DL", "JV"]
+
+# 子機用の設定(AT コマンド名, 値の 16 進文字列)。AP は最後に書く(透過モードのコマンドモード中に API へ切り替わらないように)
+CHILD_SETTINGS = [("ID", "1114"), ("CE", "0"), ("JV", "1"), ("DH", "0"), ("DL", "0"), ("BD", "3"), ("AP", "1")]
+CHILD_READ = ["SH", "SL", "NI", "CE", "AP", "ID", "JV", "DH", "DL", "BD", "VR"]
+
+# ノード番号と XBee の 64bit アドレス(tanbo_moc/xbee_ID.xlsx)
+NODE_MACS = {
+    0: "0013A200423ECC65", 1: "0013A200423ECBC6", 2: "0013A200423EC0CD", 3: "0013A200423EB483",
+    4: "0013A200423E9827", 5: "0013A200423EB80C", 6: "0013A200423EB0A3", 7: "0013A200423EB488",
+    8: "0013A200423EC984", 9: "0013A200423EB6B4", 10: "0013A200423EAFE2", 11: "0013A200423EB740",
+    12: "0013A200423EC8E7",
+}
+PARENT_XBEES = {10: "par2(ルータ)", 11: "p3(コーディネータ)", 12: "研究室用コーディネータ"}
 
 
 def fmt(v: bytes | None) -> str:
@@ -113,6 +131,112 @@ def cmd_remote_set(a):
         r.apply_changes()
         time.sleep(1)
         print("after ", read_params(r.get_parameter, names))
+    finally:
+        d.close()
+
+
+# ---- 子機用の設定(child-setup) ---------------------------------------------------
+
+def node_of(mac: str):
+    return next((n for n, m in NODE_MACS.items() if m == mac.upper()), None)
+
+
+def at_open(port: str):
+    """透過モードの XBee を +++ でコマンドモードにする。応答したボーレートで開いた serial を返す。"""
+    import serial
+
+    for baud in (9600, 115200, 57600, 38400, 19200):
+        s = serial.Serial(port, baud, timeout=1.5)
+        time.sleep(1.2)                 # ガードタイム(GT 既定 1 秒)の前の無通信
+        s.reset_input_buffer()
+        s.write(b"+++")
+        time.sleep(1.2)                 # ガードタイムの後の無通信
+        if b"OK" in s.read(16):
+            return s, baud
+        s.close()
+    return None, None
+
+
+def at(s, cmd: str) -> str:
+    s.write(f"AT{cmd}\r".encode())
+    return s.read_until(b"\r").decode(errors="replace").strip()
+
+
+def cmd_child_setup(a):
+    # 1) API モードとして開けるか(digi-xbee)
+    try:
+        d = open_dev(a.port)
+    except Exception:
+        d = None
+    if d is not None:
+        try:
+            mac = str(d.get_64bit_addr())
+            n = node_of(mac)
+            ni = a.ni or (f"node{n}" if n is not None else None)
+            print(f"API モードで開けた: MAC {mac}" + (f"(node {n})" if n is not None else "(表にない XBee)"))
+            if n in PARENT_XBEES:
+                print(f"注意: これは親機用の XBee({PARENT_XBEES[n]})。子機用に書き換えない")
+                return
+            before = read_params(d.get_parameter, [k for k, _ in CHILD_SETTINGS] + ["NI"])
+            print("before", before)
+            done = all(before[k] != "-" and int(before[k], 16) == int(v, 16) for k, v in CHILD_SETTINGS
+                       if not before[k].startswith("(")) and (not ni or before["NI"] == f"'{ni}'")
+            if done:
+                print("すでに子機用の設定になっている。書き換えない")
+                return
+            if a.dry_run:
+                return
+            for k, v in CHILD_SETTINGS:
+                d.set_parameter(k, bytes.fromhex(v.rjust(len(v) + len(v) % 2, "0")))
+            if ni:
+                d.set_parameter("NI", ni.encode())
+            d.write_changes()
+            d.apply_changes()
+            time.sleep(1)
+            print("after ", read_params(d.get_parameter, [k for k, _ in CHILD_SETTINGS] + ["NI"]))
+        finally:
+            d.close()
+        return
+
+    # 2) 透過モード: +++ でコマンドモード。digi-xbee が判定のために +++ を送っていることがあるので、
+    #    そのコマンドモードが時間切れ(CT 既定 10 秒)で終わるのを待ってから
+    print("API モードでは開けない → 透過モードとして +++ で入る(11 秒待つ)")
+    time.sleep(11)
+    s, baud = at_open(a.port)
+    if s is None:
+        print("XBee が応答しない(API でも +++ でも)。挿し方・電源・アダプタを確認")
+        return
+    try:
+        before = {k: at(s, k) for k in CHILD_READ}
+        mac = (before["SH"].rjust(8, "0") + before["SL"].rjust(8, "0")).upper()
+        n = node_of(mac)
+        ni = a.ni or (f"node{n}" if n is not None else None)
+        print(f"透過モード(コマンドモード、{baud} bps)で開けた: MAC {mac}" +
+              (f"(node {n})" if n is not None else "(表にない XBee)"))
+        print("before", {k: v for k, v in before.items() if k not in ("SH", "SL")})
+        if n in PARENT_XBEES:
+            print(f"注意: これは親機用の XBee({PARENT_XBEES[n]})。子機用に書き換えない")
+            at(s, "CN")
+            return
+        if a.dry_run:
+            at(s, "CN")
+            return
+        results = [(k, v, at(s, k + v)) for k, v in CHILD_SETTINGS]
+        if ni:
+            results.append(("NI", ni, at(s, "NI" + ni)))
+        bad = [r for r in results if r[2] != "OK"]
+        if bad:
+            print("書けなかった設定があるので保存しない:", bad)
+            at(s, "CN")
+            return
+        print("WR(保存):", at(s, "WR"), " CN(反映・終了):", at(s, "CN"))
+    finally:
+        s.close()
+    # 3) AP=1・9600 bps になったので API で開いて確かめる
+    time.sleep(1.5)
+    d = open_dev(a.port)
+    try:
+        print("after ", read_params(d.get_parameter, [k for k, _ in CHILD_SETTINGS] + ["NI"]))
     finally:
         d.close()
 
@@ -209,6 +333,9 @@ def main():
     p = sub.add_parser("remote"); p.add_argument("--port", required=True); p.add_argument("--mac", required=True)
     p = sub.add_parser("remote-set"); p.add_argument("--port", required=True); p.add_argument("--mac", required=True)
     p.add_argument("params", nargs="+", help="NAME=16進値(例 AP=01)")
+    p = sub.add_parser("child-setup"); p.add_argument("--port", required=True)
+    p.add_argument("--ni", help="NI(ノードの名前)。省略時は node<番号>")
+    p.add_argument("--dry-run", action="store_true", help="今の設定を読むだけで書かない")
     for name in ("test", "req"):
         p = sub.add_parser(name)
         if name == "test":
@@ -220,7 +347,8 @@ def main():
         p.add_argument("--wait", type=float, default=3.0, help="1 回の REQ のあと応答を待つ秒数")
     a = ap.parse_args()
     {"ports": cmd_ports, "info": cmd_info, "setup": cmd_setup, "remote": cmd_remote,
-     "remote-set": cmd_remote_set, "test": cmd_test, "req": cmd_req}[a.cmd](a)
+     "remote-set": cmd_remote_set, "child-setup": cmd_child_setup,
+     "test": cmd_test, "req": cmd_req}[a.cmd](a)
 
 
 if __name__ == "__main__":
