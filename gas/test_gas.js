@@ -18,7 +18,11 @@ function makeEnv() {
         assert.strictEqual(row.length, this.nc, 'col count');
         if (this.r + i > this.sh.maxRows) throw new Error('outside the dimensions of the sheet');
         this.sh.data[this.r + i - 1] = this.sh.data[this.r + i - 1] || [];
-        row.forEach((x, j) => { this.sh.data[this.r + i - 1][this.c + j - 1] = x; });
+        row.forEach((x, j) => {
+          const auto = typeof x === 'string' && /^\d{1,2}\/\d{1,2}$/.test(x) && this.sh.fmt[this.c + j] !== '@';
+          this.sh.data[this.r + i - 1][this.c + j - 1] = auto
+            ? new Date(Date.UTC(2026, Number(x.split('/')[0]) - 1, Number(x.split('/')[1])) - 9 * 3600000) : x;
+        });
       });
       return this;
     }
@@ -41,6 +45,10 @@ function makeEnv() {
       return this;
     }
     setFontWeight() { return this; }
+    clearFormat() {
+      for (let j = 0; j < this.nc; j++) delete this.sh.fmt[this.c + j];
+      return this;
+    }
     clearContent() {
       for (let i = 0; i < this.nr; i++) {
         const row = this.sh.data[this.r + i - 1];
@@ -104,6 +112,7 @@ function makeEnv() {
           timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
           hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
         }).formatToParts(d).map((x) => [x.type, x.value]));
+        if (fmt === 'M/d') return Number(p.month) + '/' + Number(p.day);
         return fmt.replace('yyyy', p.year).replace('MM', p.month).replace('dd', p.day)
           .replace('HH', p.hour).replace('mm', p.minute).replace('ss', p.second);
       },
@@ -339,5 +348,36 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   as.fmt[1] = '0';
   assert.deepStrictEqual(as.data.slice(1).map((r) => [r[0], r[1]]),
     [[2, 'parent-2'], [4, 'parent-2'], [10, 'parent-2'], [11, 'parent-1']]);
+}
+
+// ---------------------------------------------------------------- 日時でない列の書式(v2.2.2)
+{
+  const e = makeEnv();
+  e.ctx.setup();
+  const tok = e.props.TOKEN;
+  post(e, { ...health, token: tok });
+  post(e, { ...meas, token: tok });
+  const lt = e.sheets['最新'];
+  const okRow = lt.data.slice(1).find((r) => r[2] === 'OK');
+  assert.strictEqual(typeof okRow[5], 'string');           // "7/7" が日付にならない
+  assert.ok(/^\d+\/\d+$/.test(okRow[5]));
+  const hmonth = e.ctx.Utilities.formatDate(new Date(health.rows[0].ts * 1000), 'Asia/Tokyo', 'yyyy-MM');
+  const hs = e.sheets['health_' + hmonth];
+  assert.ok(!String(hs.fmt[2] || '').includes('yyyy'));    // health_ の Interval_s は日時の書式にしない
+  assert.ok(String(hs.fmt[1]).includes('yyyy'));
+  const dmonth = e.ctx.Utilities.formatDate(new Date(meas.rows[0].ts * 1000), 'Asia/Tokyo', 'yyyy-MM');
+  assert.ok(String(e.sheets['data_' + dmonth].fmt[2]).includes('yyyy'));   // data_ の CycleTime は日時
+  // 旧版の状態: 日付になってしまった Valid/Tries、日時の書式の health_ B 列・親機シートの値の列 → setup と次の書き込みで直る
+  okRow[5] = new Date(Date.UTC(2026, 6, 7) - 9 * 3600000);
+  lt.fmt[6] = 'yyyy/mm/dd';
+  hs.fmt[2] = 'yyyy-mm-dd hh:mm:ss';
+  e.sheets['親機'].fmt[2] = 'yyyy-mm-dd hh:mm:ss';
+  e.ctx.setup();
+  assert.strictEqual(hs.fmt[2], '0');
+  assert.strictEqual(e.sheets['親機'].fmt[2], undefined);
+  assert.strictEqual(lt.fmt[6], '@');
+  post(e, { ...meas, token: tok, rows: [{ ...meas.rows[0], id: 999, node: 99, status: 'TIMEOUT' }] });
+  const fixed = lt.data.slice(1).find((r) => r[0] === okRow[0]);
+  assert.strictEqual(fixed[5], '7/7');
 }
 console.log('GAS tests passed');

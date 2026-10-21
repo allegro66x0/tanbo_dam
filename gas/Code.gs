@@ -23,7 +23,7 @@
  *       (実行ユーザー: 自分、アクセス: 全員)
  */
 
-const VERSION = '2.2.1';
+const VERSION = '2.2.2';
 const SPREADSHEET_ID = '1UDnr3DmX6d8fwvJzFMTeNSNxzkm9DyW7RCXji2xLfSQ';   // tambo_data2
 const TZ = 'Asia/Tokyo';
 const SHEET_LATEST = '最新';
@@ -198,8 +198,8 @@ function getOrCreateSheet_(ss, name, header) {
     sh = ss.insertSheet(name);
     sh.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
     sh.setFrozenRows(1);
-    if (header[0] === 'Timestamp') {   // 月別シートの Timestamp / CycleTime だけ日時の書式
-      sh.getRange('A:B').setNumberFormat('yyyy-mm-dd hh:mm:ss');
+    if (header[0] === 'Timestamp') {   // 月別シートの Timestamp(と data_ の CycleTime)だけ日時の書式
+      sh.getRange(header[1] === 'CycleTime' ? 'A:B' : 'A:A').setNumberFormat('yyyy-mm-dd hh:mm:ss');
     } else if (header[0] === 'Node') {
       sh.getRange('A:A').setNumberFormat('0');
     }
@@ -230,6 +230,8 @@ function updateLatest_(ss, rows, pid) {
     const node = nodeNum_(row[0]);
     if (node !== null) {   // 同じノードの行が重なっていたら(v2.1 の不具合)最後の行を残す
       row[0] = node;
+      // v2.2.1 までは "7/7" が日付(7 月 7 日)に自動変換されていた → 元の "有効/試行" に戻す
+      if (row[5] instanceof Date) row[5] = Utilities.formatDate(row[5], TZ, 'M/d');
       byNode[node] = row;
     }
   });
@@ -253,6 +255,7 @@ function updateLatest_(ss, rows, pid) {
     .sort(function (a, b) { return Number(a[0]) - Number(b[0]); });
   if (out.length) {
     if (out.length + 1 > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), out.length);
+    sh.getRange(2, 6, out.length, 1).setNumberFormat('@');   // "7/7" を日付にさせない(書く前に文字列の書式)
     sh.getRange(2, 1, out.length, LATEST_HEADER.length).setValues(out);
     sh.getRange(2, 1, out.length, 1).setNumberFormat('0');
     sh.getRange(2, 2, out.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
@@ -428,13 +431,18 @@ function setup() {
       .setValues(INITIAL_ASSIGN.map(function (a) { return [a[0], a[1], now, a[2]]; }));
     sh.getRange(2, 3, INITIAL_ASSIGN.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
   }
-  // v2.1 までは「最新」(と v2.2.0 の「分担」)の Node 列に日時の書式が付いていた → 数値の書式に直す
+  // v2.1 までは新しいシートの A:B すべてに日時の書式が付いていた → 日時でない列の書式を直す
   [SHEET_LATEST, SHEET_ASSIGN].forEach(function (name) {
     const sh = ss.getSheetByName(name);
     if (sh) {
-      sh.getRange('A:A').setNumberFormat('0');
-      if (name === SHEET_ASSIGN) sh.getRange('B:B').setNumberFormat('@');
+      sh.getRange('A:A').setNumberFormat('0');                                  // Node
+      sh.getRange(name === SHEET_ASSIGN ? 'B:B' : 'F:F').setNumberFormat('@');  // 担当親機 / Valid/Tries
     }
+  });
+  const parentSh = ss.getSheetByName(SHEET_PARENT);
+  if (parentSh) parentSh.getRange('B:Z').clearFormat();   // 値の列(最終ハートビートの行は書くたびに日時の書式を付ける)
+  ss.getSheets().forEach(function (sh) {
+    if (sh.getName().indexOf('health_') === 0) sh.getRange('B:B').setNumberFormat('0');   // Interval_s
   });
   writeHelp_(ss);
 
