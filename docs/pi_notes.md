@@ -704,3 +704,45 @@ sudo systemctl daemon-reload && sudo systemctl restart tanbo-parent && sudo syst
   - 約 1 時間後: 13〜14 V、コントローラーの表示も充電中 → ソーラーからの充電は動いている
   - 屋内に取り込んでしばらく置いたあと: 12.9 V。朝の 12.60 V から満充電の目安(約 12.7 V)を超えた。
     充電直後の表面電荷で高めに出ている分はあるが、晴れていれば 1〜2 時間で前夜の消費分(約 0.6 Ah)は戻る
+
+## 2026-10-23 p3 の更新、XBee 11 のルータ化、子機の移行、現地への設置
+
+### p3 の更新(研究室)
+- コードを最新にして `/opt/tanbo` に入れ直し、unit file(gpio グループ)も入れ直した
+- 設定: `[nodes]` から 10・12 を外して 0 を足した。`[assign] initial = [2, 3]`(初めは `[assign]` が書かれておらず [nodes] 全部を測っていた)。parent_id は既定の parent-1
+- **親機の地点のセンサを GPIO 直結に切り替えた**(par2 と同じシールド。消費を減らすため、USB の ESP32 は使わない)。
+  `[local] type = "gpio"`、`node = 11`、`trig = 23`、`echo = 24`。`sudo /opt/tanbo/venv/bin/pip install "/opt/tanbo[gpio]"` で gpiod を入れた。
+  シールドを付けたあと node 11 は 7/7 で測れた(近くで人が動くと値の幅が広がる)
+- **XBee 11 をルータにした**(`xbee_lab.py setup --role router`)。元の設定: CE=01、OI 062D、CH 18、JV=01、NJ=FE(現地のネットワークのコーディネータ)。
+  書き換え後 CE=00、JV=00、NJ=FF。par2 の XBee 12 のネットワークに参加した
+
+### 子機の移行
+- `xbee_lab.py child-setup` に **NR0(今のネットワークから抜ける)** を足した。JV=0 は覚えているネットワークに戻るので、抜けさせないと
+  もう無い現地のネットワーク(062D)に居続ける。透過モードでは AP=1 を反映する前に NR0 を送る
+- node 2(透過モード、JV=1、NI `cyuukei1`)と node 3(API、JV=1、AO=1)を書き換えた。node 2 は v2.2.1 で 12 のネットワークから応答した。
+  node 3 は基板の故障で修理中
+- node 1 は XBee の接触不良で TX_FAIL になっていた(挿し直して復帰)。電源を入れて 13 秒で応答(JV=0 で覚えているネットワークに戻る)
+
+### 表示用の画面(GAS v2.3.0)
+- `gas/Dashboard.html` と Code.gs の dashData / dashSetAssign / dashSetLinks。「アクセス: 自分のみ」のデプロイで、持ち主だけが開ける
+- 本番で、分担の変更(node 3・4 → 測らない、理由「手動(画面)」)と親機のリンクの保存ができた
+- 最初の版は表が空になった: google.script.run で null の項目が落ちて `toFixed` でエラー → null / undefined の両方で動くように直した
+- 「親機」シートの parent-1 の列は古い版の日時の書式が残っていて、"2/3" や数値が日付で読めた → 画面側で元の値に戻す。新しい版で書き直されて直った
+- GAS の更新で `setup` を実行すると、シートにないノードの行(INITIAL_ASSIGN の 4 → parent-1)が足される。空欄の行を残しておけば足されない
+
+### par2 の省電力
+- `systemctl set-default multi-user.target`(デスクトップなし)、`systemctl disable --now bluetooth`。見込みで 0.3〜0.5 W 減
+
+### 現地への設置(par2 + 子機)
+- 親機は par2 だけ(親機用の電池が 24 Ah の 1 個)。p3 は研究室に置いて電源を切った
+- par2 を旧 node 4 の地点に置き、子機と通信を確立してから各地点へ運んだ
+  - **南側(設置予定 A・B)は届かなかった**
+  - 旧 node 2 の地点(par2 から北へ約 86 m)の **node 1 は 3 時間で OK 34/82 回(約 4 割)**。失敗の多くは TIMEOUT(40 回、REQ は届くが応答が戻らない)、
+    TX_FAIL(0x24)が 8 回。夕方に 4 回続けて TIMEOUT、そのあと 17:30〜18:20 は 6 回続けて OK と、時間帯で大きく変わる
+  - node 2 は par2 のすぐ脇に置いた(置いてから全部 OK)。node 0 は持ち帰った
+- 届かない原因の見立て: アンテナが地面に近い(86 m でフレネルゾーンの半径が中央で約 1.6 m)、親機の XBee が Pi・通信端末の近くにある。
+  対策の候補: アンテナを 1〜2 m に上げる、親機の XBee を USB 延長で離す、子機を中継に置く、外付けアンテナの XBee
+
+### 親機の再送
+- `[xbee] retries`(既定 1、0〜5): TIMEOUT / TX_FAIL のとき同じサイクルの中で送り直す。前の REQ への応答が遅れて届いたらそれを採用する
+- テストは par2 で 39 件すべて通った(WSL が無いので、`/tmp` にコードを送って par2 の venv で実行)。par2 に入れて 17:33 に再起動

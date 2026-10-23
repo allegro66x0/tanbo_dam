@@ -9,7 +9,7 @@
 ## 構成
 
 - `parent/` 親機(Raspberry Pi 4、Python 3.11+)。パッケージ `tanbo`、systemd サービス `tanbo-parent`、操作 CLI `tanboctl`
-  - poller.py: 壁時計に揃えた周期で全ノードへ `REQ,<seq>` → seq 一致の応答だけ採用
+  - poller.py: 壁時計に揃えた周期で全ノードへ `REQ,<seq>` → seq 一致の応答だけ採用。TIMEOUT / TX_FAIL は同じサイクルで `[xbee] retries` 回まで送り直す
   - store.py: SQLite(WAL)に先に書く store-and-forward
   - uploader.py: 未送信をまとめて GAS へ POST、返ってきた hwm まで送信済みにする。応答の分担表を assign へ渡す
   - assign.py: GAS の分担表(ノード → 担当親機)。自分の担当だけを測る。SQLite に保存し、受け取るまでは `[assign] initial`
@@ -18,6 +18,7 @@
     `type = "gpio"` は GPIO 直結の HC-SR04(libgpiod のエッジイベントでパルス幅、子機と同じ測り方)
   - web.py + static/index.html: 操作画面(別プロセス tanbo-web)。SQLite を読み取り専用で読み、操作は制御ソケット経由。標準ライブラリのみ
 - `gas/` 受信 GAS。書き込み先はスプレッドシート **tambo_data2**(`SPREADSHEET_ID`)。旧 `tanbo_data` は凍結
+  - `Dashboard.html`: 表示用の画面(「アクセス: 自分のみ」のデプロイで、持ち主だけ)。最新の状態・親機の状態・分担の変更。親機の操作画面へのリンクはスクリプトプロパティ `PARENT_LINKS`
 - `child/tanbo_child_v2/` 子機ファーム(ESP32-WROVER + HC-SR04)。全子機同一コード
 - `docs/PROTOCOL.md` 子機↔親機プロトコル v2
 
@@ -35,7 +36,7 @@
 - 子機は距離ではなくエコー時間(往復 µs)の中央値・最小・最大を返す。温度補正は後処理
 - 周期: 通常 10 分。設置チェック時は `tanboctl check` で一時的に 60 秒(期限付きで自動復帰)
 - deep sleep は見送り(子機は常時起動、親機からのポーリング)
-- 親機の地点の水位は、p3 は USB でつないだ ESP32 + HC-SR04(子機と同じファーム)、par2 は GPIO に直結した HC-SR04
+- 親機の地点の水位は、p3・par2 とも GPIO に直結した HC-SR04(2026-10-23 から。p3 は以前 USB の ESP32 だった)
   (ピン 2/16/18/20、ECHO は 10k/20k で分圧)で測る。ノード番号は `[local] node`
 - 親機の操作はローカルの操作画面を Tailscale 経由でスマホから開いて行う
 - GAS は受信に加えて**分担表(どの親機がどのノードを測るか)だけ**を応答で返す。それ以外の命令は送らない・親機も受け付けない(2026-10-21 決定)。

@@ -1,7 +1,7 @@
 """研究室での XBee の設定と、2 台親機構成の確認テスト(par2 の parent/.venv で動かす)
 
-親機用の XBee は番号の後ろから使う: 12 = 研究室用コーディネータ、10 = par2(ルータ)。
-**研究室用コーディネータ(12)は現地に持ち込まない**(同じ PAN ID のネットワークがもう 1 つできる)。
+親機用の XBee は番号の後ろから使う: 12 = par2(現地のコーディネータ)、11 = p3(ルータ)、10 = 予備(2026-10-22 から)。
+**1 つの現場にコーディネータは 1 台**(同じ PAN ID のネットワークがもう 1 つできる)。
 
   python xbee_lab.py ports
   python xbee_lab.py info   --port P
@@ -14,6 +14,9 @@
 
 child-setup: ID=1114、CE=0(ルータ)、JV=0、AP=1(API)、AO=0(受信は 0x90)、DH/DL=0、BD=3(9600)、NI=node<番号> に書き換えて保存する。
 今が透過モード(AP=0)でも API モードでも書ける(透過なら +++ のコマンドモード、API なら AT フレーム)。
+書いたあと NR0 で今のネットワークから抜けさせる(JV=0 は覚えているネットワークに戻るので、抜けさせないと
+もう無いネットワーク(11 がコーディネータだった現地の 062D など)に居続ける)。子機に戻すと、ID が同じで参加を受け付けている
+コーディネータ(12)のネットワークに入る。
 AP=1 の子機は、ESP32 のファームが v2.2.0 以降でないと応答できない。
 
 test で確かめること:
@@ -48,7 +51,7 @@ NODE_MACS = {
     8: "0013A200423EC984", 9: "0013A200423EB6B4", 10: "0013A200423EAFE2", 11: "0013A200423EB740",
     12: "0013A200423EC8E7",
 }
-PARENT_XBEES = {10: "par2(ルータ)", 11: "p3(コーディネータ)", 12: "研究室用コーディネータ"}
+PARENT_XBEES = {10: "予備", 11: "p3(ルータ)", 12: "par2(現地のコーディネータ)"}
 
 
 def fmt(v: bytes | None) -> str:
@@ -200,6 +203,8 @@ def cmd_child_setup(a):
             d.apply_changes()
             time.sleep(1)
             print("after ", read_params(d.get_parameter, [k for k, _ in CHILD_SETTINGS] + ["NI"]))
+            d.set_parameter("NR", b"\x00")
+            print("NR0(今のネットワークから抜けた)")
         finally:
             d.close()
         return
@@ -227,6 +232,8 @@ def cmd_child_setup(a):
         if a.dry_run:
             at(s, "CN")
             return
+        # NR0 は AP=1 を反映する前(文字のコマンドが通るうち)に送る
+        print("NR0(今のネットワークから抜ける):", at(s, "NR0"))
         results = [(k, v, at(s, k + v)) for k, v in CHILD_SETTINGS]
         if ni:
             results.append(("NI", ni, at(s, "NI" + ni)))
