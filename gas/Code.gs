@@ -21,9 +21,13 @@
  *
  * 初回: エディタで setup() を1回実行 → ログに出る TOKEN を親機の設定に書く → ウェブアプリとしてデプロイ
  *       (実行ユーザー: 自分、アクセス: 全員)
+ *
+ * 表示用の画面(Dashboard.html): 同じプロジェクトをもう 1 つ「アクセス: 自分のみ」でデプロイし、その URL を開く。
+ *   持ち主が開いたときだけ画面を出す(それ以外は今までどおりバージョンの JSON)。最新の状態・親機の状態を見て、分担を変えられる。
+ *   親機の操作画面へのリンクはスクリプトプロパティ PARENT_LINKS に置く(公開リポジトリにホスト名を書かないため)。画面から編集できる。
  */
 
-const VERSION = '2.2.3';
+const VERSION = '2.3.0';
 const SPREADSHEET_ID = '1UDnr3DmX6d8fwvJzFMTeNSNxzkm9DyW7RCXji2xLfSQ';   // tambo_data2
 const TZ = 'Asia/Tokyo';
 const SHEET_LATEST = '最新';
@@ -127,7 +131,12 @@ function doPost(e) {
 }
 
 function doGet() {
-  return json_({ ok: true, version: VERSION });
+  if (!isOwner_()) {
+    return json_({ ok: true, version: VERSION });
+  }
+  return HtmlService.createHtmlOutputFromFile('Dashboard')
+    .setTitle('田んぼダム 計測状況')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 // ------------------------------------------------------------------ writers
@@ -364,6 +373,162 @@ function failover_(ss, props, dead, hbs, failoverMin) {
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ------------------------------------------------------------------ dashboard(表示用の画面)
+
+/** スクリプトの持ち主が開いているか。「アクセス: 全員」のデプロイに匿名で来たときは ActiveUser が空になる。 */
+function isOwner_() {
+  try {
+    const who = Session.getActiveUser().getEmail();
+    return !!who && who === Session.getEffectiveUser().getEmail();
+  } catch (err) {
+    return false;
+  }
+}
+
+function requireOwner_() {
+  if (!isOwner_()) throw new Error('この操作はスクリプトの持ち主だけができます');
+}
+
+/** 画面に渡す値。google.script.run は Date を渡せないので epoch ミリ秒にする。 */
+function ms_(d) {
+  return d instanceof Date ? d.getTime() : null;
+}
+
+function num_(x) {
+  return (x === '' || x === null || x === undefined || isNaN(Number(x))) ? null : Number(x);
+}
+
+function readLinks_(props) {
+  try {
+    const o = JSON.parse(props.getProperty('PARENT_LINKS') || '{}');
+    return (o && typeof o === 'object') ? o : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+/** 画面の表示に使う値をまとめて返す(google.script.run から呼ぶ)。 */
+function dashData() {
+  requireOwner_();
+  const ss = ss_();
+  const props = PropertiesService.getScriptProperties();
+
+  const nodes = [];
+  const lt = ss.getSheetByName(SHEET_LATEST);
+  if (lt && lt.getLastRow() >= 2) {
+    lt.getRange(2, 1, lt.getLastRow() - 1, LATEST_HEADER.length).getValues().forEach(function (r) {
+      const node = nodeNum_(r[0]);
+      if (node === null) return;
+      nodes.push({
+        node: node, ts: ms_(r[1]), status: String(r[2]), dist: num_(r[3]), med: num_(r[4]),
+        valid: r[5] instanceof Date ? Utilities.formatDate(r[5], TZ, 'M/d') : String(r[5]),
+        okTs: ms_(r[6]), okDist: num_(r[7]), fails: Number(r[8]) || 0, fw: String(r[9]), parent: String(r[10]),
+      });
+    });
+  }
+
+  const assign = [];
+  const as = ss.getSheetByName(SHEET_ASSIGN);
+  if (as && as.getLastRow() >= 2) {
+    as.getRange(2, 1, as.getLastRow() - 1, ASSIGN_HEADER.length).getValues().forEach(function (r) {
+      const node = nodeNum_(r[0]);
+      if (node === null) return;
+      assign.push({ node: node, parent: String(r[1]).trim(), changed: ms_(r[2]), reason: String(r[3]) });
+    });
+  }
+
+  // 親機: 「親機」シートの列(項目 → 値)と、ハートビート・地点のノード・担当を移したかのプロパティ
+  const parents = {};
+  const ps = ss.getSheetByName(SHEET_PARENT);
+  if (ps && ps.getLastRow() >= 2 && ps.getLastColumn() >= 2) {
+    const v = ps.getRange(1, 1, ps.getLastRow(), ps.getLastColumn()).getValues();
+    for (let c = 1; c < v[0].length; c++) {
+      const pid = String(v[0][c]).trim();
+      if (!pid) continue;
+      const items = {};
+      for (let r = 1; r < v.length; r++) {
+        const k = String(v[r][0]);
+        const x = v[r][c];
+        if (!k) continue;
+        if (k === '最終ハートビート') {
+          items[k] = ms_(x);
+        } else if (x instanceof Date) {
+          // v2.2.1 までに作った列は日時の書式が付いていて、"2/3" や数値が日付で読める → 元の値に戻す
+          items[k] = k.indexOf('/') >= 0 ? Utilities.formatDate(x, TZ, 'M/d')
+            : Math.round((x.getTime() - (Date.UTC(1899, 11, 30) - 9 * 3600000)) / 864000) / 100;
+        } else {
+          items[k] = v_(x);
+        }
+      }
+      parents[pid] = { items: items };
+    }
+  }
+  const hbs = heartbeats_(props);
+  Object.keys(hbs).forEach(function (pid) {
+    parents[pid] = parents[pid] || { items: {} };
+  });
+  Object.keys(parents).forEach(function (pid) {
+    const local = props.getProperty('local_' + pid);
+    parents[pid].hb = hbs[pid] ? hbs[pid] * 1000 : null;
+    parents[pid].localNode = local === null ? null : Number(local);
+    parents[pid].failedOver = props.getProperty('failover_' + pid) === '1';
+  });
+
+  return {
+    version: VERSION, now: Date.now(), sheetUrl: ss.getUrl(),
+    nodes: nodes, assign: assign, parents: parents, links: readLinks_(props),
+    staleMin: Number(props.getProperty('STALE_MIN') || DEFAULT_STALE_MIN),
+    failoverMin: Number(props.getProperty('FAILOVER_MIN') || DEFAULT_FAILOVER_MIN),
+  };
+}
+
+/** 画面から分担を変える。pid が空なら「どの親機も測らない」。行が無いノードは末尾に足す。 */
+function dashSetAssign(node, pid, reason) {
+  requireOwner_();
+  node = Number(node);
+  pid = String(pid || '').trim();
+  if (!Number.isInteger(node) || node < 0 || node > 999) throw new Error('ノード番号が正しくありません');
+  if (pid && !/^[A-Za-z0-9_-]{1,32}$/.test(pid)) throw new Error('親機 ID が正しくありません');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) throw new Error('ほかの書き込みと重なりました。もう一度試してください');
+  try {
+    const sh = getOrCreateSheet_(ss_(), SHEET_ASSIGN, ASSIGN_HEADER);
+    const n = Math.max(sh.getLastRow() - 1, 0);
+    let row = -1;
+    if (n) {
+      sh.getRange(2, 1, n, 1).getValues().forEach(function (r, i) {
+        if (nodeNum_(r[0]) === node) row = i + 2;
+      });
+    }
+    if (row < 0) row = sh.getLastRow() + 1;
+    if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 10);
+    const why = '手動(画面)' + (reason ? ': ' + String(reason).slice(0, 100) : '');
+    sh.getRange(row, 2).setNumberFormat('@');   // 担当親機は文字列
+    sh.getRange(row, 1, 1, ASSIGN_HEADER.length).setValues([[node, pid, new Date(), why]]);
+    sh.getRange(row, 1).setNumberFormat('0');
+    sh.getRange(row, 3).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  } finally {
+    lock.releaseLock();
+  }
+  return dashData();
+}
+
+/** 親機の操作画面へのリンク { parent_id: { name, url } } を保存する。url が空の親機は消す。 */
+function dashSetLinks(links) {
+  requireOwner_();
+  const out = {};
+  Object.keys(links || {}).forEach(function (pid) {
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(pid)) throw new Error('親機 ID が正しくありません: ' + pid);
+    const name = String(links[pid].name || '').trim().slice(0, 32);
+    const url = String(links[pid].url || '').trim();
+    if (!url) return;
+    if (!/^https?:\/\/[^\s"'<>]{1,200}$/.test(url)) throw new Error('URL が正しくありません: ' + url);
+    out[pid] = { name: name, url: url };
+  });
+  PropertiesService.getScriptProperties().setProperty('PARENT_LINKS', JSON.stringify(out));
+  return dashData();
 }
 
 // ------------------------------------------------------------------ alert

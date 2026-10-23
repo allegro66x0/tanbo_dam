@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_blank">
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #f6f7f5; --card: #ffffff; --ink: #1d2320; --sub: #5d6862; --line: #dfe3df;
+    --accent: #2f6f4f; --ok: #2e7d4f; --ok-bg: #e3f2e8; --warn: #9a6a00; --warn-bg: #fdf1d6;
+    --bad: #b3261e; --bad-bg: #fbe4e2; --mute: #7a847e; --mute-bg: #eceeec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141816; --card: #1d2320; --ink: #e6ebe7; --sub: #a3aea7; --line: #313a35;
+      --accent: #7cc49d; --ok: #7cc49d; --ok-bg: #1f3a2b; --warn: #e6c26b; --warn-bg: #3d3218;
+      --bad: #f0928b; --bad-bg: #44211f; --mute: #8d9891; --mute-bg: #2a312d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif; }
+  .wrap { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 16px; max-width: 1180px; margin: 0 auto; padding: 16px; }
+  header { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .sub { color: var(--sub); font-size: 13px; }
+  .spacer { flex: 1; }
+  button, select, input { font: inherit; color: inherit; }
+  button { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 4px 12px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { button.primary { color: #10261a; } }
+  button:disabled { opacity: .45; cursor: default; }
+  select, input { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 3px 6px; min-width: 0; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .parents { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .pcard { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .pcard .top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .pcard .name { font-weight: 600; font-size: 16px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; }
+  .kv dt { color: var(--sub); } .kv dd { margin: 0; text-align: right; }
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .ok { color: var(--ok); background: var(--ok-bg); } .warn { color: var(--warn); background: var(--warn-bg); }
+  .bad { color: var(--bad); background: var(--bad-bg); } .mute { color: var(--mute); background: var(--mute-bg); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { color: var(--sub); font-weight: 500; font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.changed td { background: var(--warn-bg); }
+  .note { color: var(--warn); font-size: 12px; }
+  aside section { position: sticky; top: 16px; }
+  aside ul { list-style: none; margin: 0; padding: 0; }
+  aside li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  aside li:last-child { border-bottom: 0; }
+  aside a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  aside a:hover { text-decoration: underline; }
+  .links-edit label { display: block; font-size: 12px; color: var(--sub); margin-top: 8px; }
+  .links-edit input { width: 100%; margin-top: 2px; }
+  .row-actions { display: flex; gap: 8px; margin-top: 10px; }
+  #msg { grid-column: 1 / -1; display: none; padding: 8px 12px; border-radius: 8px; }
+  #msg.show { display: block; }
+  .add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; font-size: 14px; }
+  .add input[type=number] { width: 80px; }
+  @media (max-width: 760px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; }
+    header { order: -2; }
+    aside { order: -1; }
+    aside section { position: static; margin-bottom: 0; padding: 10px 14px; }
+    aside ul { display: flex; flex-wrap: wrap; gap: 4px 20px; }
+    aside li { border-bottom: 0; padding: 2px 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>田んぼダム 計測状況</h1>
+    <span class="sub" id="updated">読み込み中…</span>
+    <span class="spacer"></span>
+    <a class="sub" id="sheetLink" href="#">スプレッドシート</a>
+    <button id="reload">更新</button>
+  </header>
+  <div id="msg"></div>
+
+  <main>
+    <section>
+      <h2>親機</h2>
+      <div class="parents" id="parents"></div>
+    </section>
+    <section>
+      <h2>ノードの最新の状態</h2>
+      <div class="scroll"><table id="nodes"></table></div>
+    </section>
+    <section>
+      <h2>分担(どの親機が測るか)</h2>
+      <div class="sub">変えた分担は、各親機の次の送信(1 分ほど)で届き、その次の計測から反映されます。親機の地点のノードは、その親機がいつも測ります。</div>
+      <div class="scroll"><table id="assign"></table></div>
+      <div class="add">
+        ノードを追加: <input type="number" id="addNode" min="0" max="999" placeholder="番号">
+        <select id="addParent"></select>
+        <button id="addBtn">追加</button>
+      </div>
+    </section>
+  </main>
+
+  <aside>
+    <section>
+      <h2>親機の操作画面</h2>
+      <div id="links"></div>
+      <div class="sub" style="margin-top:8px">Tailscale につながった端末から開けます</div>
+    </section>
+  </aside>
+</div>
+
+<script>
+  var D = null;
+  var STALE_ROW_MS = 25 * 60 * 1000;   // 10 分周期で 2 回分届いていなければ「古い」
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function hm(ms) {
+    if (!ms) return '—';
+    var d = new Date(ms), now = new Date(D ? D.now : Date.now());
+    var opt = { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' };
+    if (d.toDateString() !== now.toDateString()) { opt.month = 'numeric'; opt.day = 'numeric'; }
+    return d.toLocaleString('ja-JP', opt);
+  }
+  function ago(ms) {
+    if (!ms) return '—';
+    var m = Math.round((D.now - ms) / 60000);
+    if (m < 1) return 'たった今';
+    if (m < 60) return m + ' 分前';
+    if (m < 48 * 60) return Math.round(m / 6) / 10 + ' 時間前';
+    return Math.round(m / 1440) + ' 日前';
+  }
+  function blank(x) { return x === null || x === undefined || x === ''; }
+  function cm(x) { return blank(x) || isNaN(Number(x)) ? null : Number(x).toFixed(1) + ' cm'; }
+  function statusClass(s) {
+    if (s === 'OK' || s === 'OK_V1') return 'ok';
+    if (s === 'NO_ECHO' || s === 'NO_DATA') return 'warn';
+    return 'bad';
+  }
+  function parentName(pid) {
+    var l = D.links[pid];
+    return l && l.name ? l.name + '(' + pid + ')' : pid;
+  }
+  function parentIds() {
+    var set = {};
+    Object.keys(D.parents).forEach(function (p) { set[p] = 1; });
+    Object.keys(D.links).forEach(function (p) { set[p] = 1; });
+    D.assign.forEach(function (a) { if (a.parent) set[a.parent] = 1; });
+    return Object.keys(set).sort();
+  }
+  function localOwner(node) {
+    var owner = null;
+    Object.keys(D.parents).forEach(function (p) { if (D.parents[p].localNode === node) owner = p; });
+    return owner;
+  }
+  function show(text, cls) {
+    var el = document.getElementById('msg');
+    el.className = text ? 'show ' + (cls || 'warn') : '';
+    el.textContent = text || '';
+  }
+
+  function load() {
+    document.getElementById('reload').disabled = true;
+    google.script.run.withSuccessHandler(render).withFailureHandler(fail).dashData();
+  }
+  function fail(err) {
+    document.getElementById('reload').disabled = false;
+    show('読み込み・保存に失敗しました: ' + (err && err.message || err), 'bad');
+  }
+
+  function render(data) {
+    D = data;
+    document.getElementById('reload').disabled = false;
+    document.getElementById('updated').textContent = hm(D.now) + ' 時点(1 分ごとに自動更新)・GAS v' + D.version;
+    document.getElementById('sheetLink').href = D.sheetUrl;
+    var errs = [];
+    [renderParents, renderNodes, renderAssign, function () { renderLinks(false); }].forEach(function (f) {
+      try { f(); } catch (e) { errs.push(e && e.message || String(e)); }
+    });
+    if (errs.length) show('表示の一部に失敗しました: ' + errs.join(' / '), 'bad');
+  }
+
+  function renderParents() {
+    var html = '';
+    parentIds().filter(function (p) { return D.parents[p]; }).forEach(function (pid) {
+      var p = D.parents[pid], it = p.items || {};
+      var age = p.hb ? (D.now - p.hb) / 60000 : Infinity;
+      var pill = age <= 15 ? '<span class="pill ok">稼働中</span>'
+        : age <= D.staleMin ? '<span class="pill warn">遅れ</span>' : '<span class="pill bad">途絶</span>';
+      var mine = D.assign.filter(function (a) { return a.parent === pid && a.node !== p.localNode; })
+        .map(function (a) { return a.node; });
+      var rows = [
+        ['最終ハートビート', ago(p.hb) + '(' + hm(p.hb) + ')'],
+        ['前回サイクル OK/全体', it['前回サイクル OK/全体']],
+        ['担当ノード', mine.length ? mine.join(', ') : 'なし'],
+        ['地点のノード', blank(p.localNode) ? '—' : p.localNode],
+        ['未送信(計測)', it['未送信(計測)']],
+        ['バッテリー', blank(it['バッテリー_V']) ? '—' : it['バッテリー_V'] + ' V'],
+        ['電波品質', blank(it['電波品質_%']) ? '—' : it['電波品質_%'] + ' %'],
+        ['CPU 温度', blank(it['CPU温度_C']) ? '—' : it['CPU温度_C'] + ' ℃'],
+        ['稼働時間', blank(it['稼働時間_h']) ? '—' : it['稼働時間_h'] + ' 時間'],
+        ['親機 FW', it['親機FW']],
+      ];
+      html += '<div class="pcard"><div class="top"><span class="name">' + esc(parentName(pid)) + '</span>' + pill + '</div>' +
+        '<dl class="kv">' + rows.map(function (r) {
+          return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(blank(r[1]) ? '—' : r[1]) + '</dd>';
+        }).join('') + '</dl>' +
+        (it['送信エラー'] ? '<div class="note">送信エラー: ' + esc(it['送信エラー']) + '</div>' : '') +
+        (p.failedOver ? '<div class="note">途絶えたので担当をほかの親機へ移しました。戻すときは下の「分担」で</div>' : '') +
+        '</div>';
+    });
+    document.getElementById('parents').innerHTML = html || '<div class="sub">まだハートビートがありません</div>';
+  }
+
+  function renderNodes() {
+    var byNode = {};
+    D.assign.forEach(function (a) { byNode[a.node] = a.parent; });
+    var html = '<tr><th>Node</th><th>状態</th><th>距離</th><th>有効</th><th>最終受信</th><th>最後に OK</th>' +
+      '<th>連続失敗</th><th>測った親機</th><th>担当</th><th>FW</th></tr>';
+    D.nodes.forEach(function (n) {
+      var stale = n.ts && D.now - n.ts > STALE_ROW_MS;
+      var local = localOwner(n.node);
+      var assigned = local ? local : byNode[n.node];
+      var assignText = local ? parentName(local) + '(地点)' : (assigned ? parentName(assigned) : '測らない');
+      var mismatch = assigned && n.parent && assigned !== n.parent;
+      html += '<tr>' +
+        '<td class="num"><b>' + esc(n.node) + '</b></td>' +
+        '<td><span class="pill ' + (stale ? 'mute' : statusClass(n.status)) + '">' + esc(n.status) + '</span>' +
+          (stale ? ' <span class="sub">古い</span>' : '') + '</td>' +
+        '<td class="num">' + esc(cm(n.dist) || '—') + '</td>' +
+        '<td class="num">' + esc(n.valid || '—') + '</td>' +
+        '<td>' + esc(ago(n.ts)) + '</td>' +
+        '<td>' + (n.okTs ? esc(hm(n.okTs)) + (cm(n.okDist) ? '(' + esc(cm(n.okDist)) + ')' : '') : '—') + '</td>' +
+        '<td class="num">' + (n.fails ? '<span class="pill bad">' + esc(n.fails) + '</span>' : '0') + '</td>' +
+        '<td>' + esc(n.parent ? parentName(n.parent) : '—') + '</td>' +
+        '<td>' + esc(assignText) + (mismatch ? ' <span class="note">次の計測から切り替わる</span>' : '') + '</td>' +
+        '<td class="sub">' + esc(n.fw || '') + '</td>' +
+        '</tr>';
+    });
+    document.getElementById('nodes').innerHTML = html;
+  }
+
+  function optionsHtml(selected) {
+    return '<option value="">測らない(空欄)</option>' + parentIds().map(function (p) {
+      return '<option value="' + esc(p) + '"' + (p === selected ? ' selected' : '') + '>' + esc(parentName(p)) + '</option>';
+    }).join('');
+  }
+
+  function renderAssign() {
+    var rows = D.assign.slice();
+    D.nodes.forEach(function (n) {   // 「最新」にあって分担に行がないノードも出す
+      if (!rows.some(function (a) { return a.node === n.node; })) rows.push({ node: n.node, parent: '', changed: null, reason: '' });
+    });
+    rows.sort(function (a, b) { return a.node - b.node; });
+    var html = '<tr><th>Node</th><th>担当親機</th><th>理由(任意)</th><th></th><th>最後の変更</th></tr>';
+    rows.forEach(function (a) {
+      var local = localOwner(a.node);
+      html += '<tr data-node="' + a.node + '" data-orig="' + esc(a.parent || '') + '">' +
+        '<td class="num"><b>' + esc(a.node) + '</b></td>' +
+        (local
+          ? '<td colspan="3" class="sub">' + esc(parentName(local)) + ' の地点(その親機がいつも測る)</td>'
+          : '<td><select class="pick">' + optionsHtml(a.parent) + '</select></td>' +
+            '<td><input class="why" placeholder="例: par2 の設置"></td>' +
+            '<td><button class="primary save" disabled>保存</button></td>') +
+        '<td class="sub">' + (a.changed ? esc(hm(a.changed)) + ' ' : '') + esc(a.reason || '') + '</td>' +
+        '</tr>';
+    });
+    var t = document.getElementById('assign');
+    t.innerHTML = html;
+    t.querySelectorAll('tr[data-node]').forEach(function (tr) {
+      var pick = tr.querySelector('.pick');
+      if (!pick) return;
+      var btn = tr.querySelector('.save');
+      pick.addEventListener('change', function () {
+        var changed = pick.value !== tr.getAttribute('data-orig');
+        btn.disabled = !changed;
+        tr.classList.toggle('changed', changed);
+      });
+      btn.addEventListener('click', function () {
+        saveAssign(Number(tr.getAttribute('data-node')), tr.getAttribute('data-orig'), pick.value, tr.querySelector('.why').value);
+      });
+    });
+    document.getElementById('addParent').innerHTML = optionsHtml('');
+  }
+
+  function saveAssign(node, from, to, why) {
+    var msg = 'node ' + node + ' の担当を「' + (from ? parentName(from) : '測らない') + '」から「' +
+      (to ? parentName(to) : '測らない') + '」に変えます。';
+    if (!confirm(msg)) return;
+    show('保存しています…');
+    google.script.run.withSuccessHandler(function (d) {
+      show('node ' + node + ' の分担を保存しました', 'ok');
+      render(d);
+    }).withFailureHandler(fail).dashSetAssign(node, to, why);
+  }
+
+  document.getElementById('addBtn').addEventListener('click', function () {
+    var v = document.getElementById('addNode').value;
+    var node = Number(v);
+    if (v === '' || !Number.isInteger(node) || node < 0 || node > 999) { show('ノード番号を 0〜999 で入れてください', 'bad'); return; }
+    var cur = D.assign.filter(function (a) { return a.node === node; })[0];
+    saveAssign(node, cur ? cur.parent : '', document.getElementById('addParent').value, '');
+  });
+
+  function renderLinks(editing) {
+    var el = document.getElementById('links');
+    var pids = parentIds();
+    if (!editing) {
+      var items = pids.filter(function (p) { return D.links[p] && D.links[p].url; }).map(function (p) {
+        return '<li><a href="' + esc(D.links[p].url) + '" rel="noopener">' + esc(D.links[p].name || p) + '</a>' +
+          '<div class="sub">' + esc(p) + '</div></li>';
+      });
+      el.innerHTML = (items.length ? '<ul>' + items.join('') + '</ul>' : '<div class="sub">まだリンクがありません</div>') +
+        '<div class="row-actions"><button id="editLinks">編集</button></div>';
+      document.getElementById('editLinks').addEventListener('click', function () { renderLinks(true); });
+      return;
+    }
+    el.innerHTML = '<div class="links-edit">' + pids.map(function (p) {
+      var l = D.links[p] || {};
+      return '<div data-pid="' + esc(p) + '"><b>' + esc(p) + '</b>' +
+        '<label>表示名<input class="ln" value="' + esc(l.name || '') + '" placeholder="例: p3"></label>' +
+        '<label>URL<input class="lu" value="' + esc(l.url || '') + '" placeholder="http://<Tailscale 名>:8080/"></label></div>';
+    }).join('') + '</div>' +
+      '<div class="row-actions"><button class="primary" id="saveLinks">保存</button><button id="cancelLinks">やめる</button></div>';
+    document.getElementById('cancelLinks').addEventListener('click', function () { renderLinks(false); });
+    document.getElementById('saveLinks').addEventListener('click', function () {
+      var links = {};
+      el.querySelectorAll('[data-pid]').forEach(function (div) {
+        links[div.getAttribute('data-pid')] = { name: div.querySelector('.ln').value, url: div.querySelector('.lu').value };
+      });
+      show('保存しています…');
+      google.script.run.withSuccessHandler(function (d) { show('リンクを保存しました', 'ok'); render(d); })
+        .withFailureHandler(fail).dashSetLinks(links);
+    });
+  }
+
+  document.getElementById('reload').addEventListener('click', function () { show(''); load(); });
+  setInterval(function () {
+    // 編集中(保存前の変更、リンクの編集)は上書きしない
+    if (document.hidden || document.querySelector('tr.changed') || document.getElementById('saveLinks')) return;
+    load();
+  }, 60000);
+  load();
+</script>
+</body>
+</html>

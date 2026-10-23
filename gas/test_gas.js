@@ -129,7 +129,15 @@ function makeEnv() {
       getUuid: () => '11111111-2222-3333-4444-555555555555',
     },
     MailApp: { sendEmail: (to, subj) => mails.push([to, subj]) },
-    Session: { getEffectiveUser: () => ({ getEmail: () => 'me@example.com' }) },
+    Session: {
+      getEffectiveUser: () => ({ getEmail: () => 'me@example.com' }),
+      getActiveUser: () => ({ getEmail: () => env.activeUser }),
+    },
+    HtmlService: {
+      createHtmlOutputFromFile: (f) => ({
+        file: f, setTitle() { return this; }, addMetaTag() { return this; },
+      }),
+    },
     ScriptApp: {
       getProjectTriggers: () => [],
       deleteTrigger: () => {},
@@ -137,9 +145,10 @@ function makeEnv() {
     },
     Date, JSON, Math, Number, String, Array, Object,
   };
+  const env = { ctx, props, sheets, mails, order, opened, getTz: () => tz, activeUser: '' };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(__dirname + '/Code.gs', 'utf8'), ctx);
-  return { ctx, props, sheets, mails, order, opened, getTz: () => tz };
+  return env;
 }
 
 function post(env, body) {
@@ -409,5 +418,90 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
     [[2, 'parent-2'], [4, 'parent-1'], [10, 'parent-2'], [11, 'parent-1'], [0, '']]);
   e.ctx.setup();                                        // 何度実行しても増えない
   assert.strictEqual(as.data.length, 6);
+}
+
+// ---------------------------------------------------------------- 表示用の画面(持ち主だけ)
+{
+  const e = makeEnv();
+  e.ctx.setup();
+  const tok = e.props.TOKEN;
+  const now = Date.now() / 1000;
+  post(e, { ...health, token: tok, parent_id: 'parent-1', local_node: 11, db_uuid: 'aaaa0001',
+    rows: [{ ...health.rows[0], id: 1, ts: now }] });
+  post(e, { ...health, token: tok, parent_id: 'parent-2', local_node: 10, db_uuid: 'bbbb0001',
+    rows: [{ ...health.rows[0], id: 1, ts: now }] });
+  post(e, { ...meas, token: tok });
+
+  // 匿名(「アクセス: 全員」のデプロイ)には今までどおり JSON、画面の関数は使えない
+  assert.strictEqual(JSON.parse(e.ctx.doGet().body).ok, true);
+  assert.throws(() => e.ctx.dashData(), /持ち主/);
+  assert.throws(() => e.ctx.dashSetAssign(2, 'parent-2', ''), /持ち主/);
+  e.activeUser = 'other@example.com';
+  assert.throws(() => e.ctx.dashData(), /持ち主/);
+
+  // 持ち主には画面
+  e.activeUser = 'me@example.com';
+  assert.strictEqual(e.ctx.doGet().file, 'Dashboard');
+  const raw = e.ctx.dashData();
+  // google.script.run は Date を渡せない → どこにも Date が入っていない(vm の Date も見分けるため toString で判定)
+  const hasDate = (x) => Object.prototype.toString.call(x) === '[object Date]' ||
+    (x !== null && typeof x === 'object' && Object.values(x).some(hasDate));
+  assert.ok(!hasDate(raw));
+  const plain = (x) => JSON.parse(JSON.stringify(x));   // google.script.run と同じく JSON を通す
+  const d = plain(raw);
+  assert.deepStrictEqual(d.nodes.map((n) => n.node), [0, 1, 2, 3, 4, 5]);
+  const dn0 = d.nodes.find((n) => n.node === 0);
+  assert.strictEqual(dn0.status, 'OK');
+  assert.strictEqual(dn0.dist, 60.1);
+  assert.ok(typeof dn0.ts === 'number' && /^\d+\/\d+$/.test(dn0.valid));
+  assert.deepStrictEqual(Object.keys(d.parents).sort(), ['parent-1', 'parent-2']);
+  assert.strictEqual(d.parents['parent-1'].localNode, 11);
+  assert.ok(Math.abs(d.parents['parent-2'].hb - now * 1000) < 2000);
+  assert.ok(typeof d.parents['parent-1'].items['最終ハートビート'] === 'number');
+  // v2.2.1 までに作った親機の列: 日時の書式で "2/3" や数値が日付で読める → 元の値に戻して渡す
+  {
+    const ps = e.sheets['親機'];
+    const row = (label) => ps.data.find((r) => r[0] === label);
+    const saved = [row('前回サイクル OK/全体')[1], row('CPU温度_C')[1]];
+    row('前回サイクル OK/全体')[1] = new Date(Date.UTC(2026, 1, 3) - 9 * 3600000);           // 2/3
+    row('CPU温度_C')[1] = new Date(Date.UTC(1900, 1, 9, 21, 36) - 9 * 3600000);              // シリアル値 41.9
+    const it = plain(e.ctx.dashData()).parents['parent-1'].items;
+    assert.strictEqual(it['前回サイクル OK/全体'], '2/3');
+    assert.strictEqual(it['CPU温度_C'], 41.9);
+    row('前回サイクル OK/全体')[1] = saved[0];
+    row('CPU温度_C')[1] = saved[1];
+  }
+  assert.deepStrictEqual(d.assign.map((a) => [a.node, a.parent]),
+    [[0, ''], [2, 'parent-1'], [4, 'parent-1'], [10, 'parent-2'], [11, 'parent-1']]);
+
+  // 分担を変える: 既存の行は書き換え、無いノードは末尾に足す。空欄は「測らない」
+  const as = e.sheets['分担'];
+  e.ctx.dashSetAssign(2, 'parent-2', 'par2 の設置');
+  const r2 = as.data.find((r) => r[0] === 2);
+  assert.strictEqual(r2[1], 'parent-2');
+  assert.ok(r2[2] instanceof Date);
+  assert.strictEqual(r2[3], '手動(画面): par2 の設置');
+  const d2 = plain(e.ctx.dashSetAssign(3, 'parent-1', ''));
+  assert.deepStrictEqual(plain(as.data[as.data.length - 1].slice(0, 2)), [3, 'parent-1']);
+  assert.ok(d2.assign.some((a) => a.node === 3 && a.parent === 'parent-1'));
+  e.ctx.dashSetAssign(4, '', '');
+  assert.strictEqual(as.data.find((r) => r[0] === 4)[1], '');
+  assert.strictEqual(as.data.length, 7);                 // 2・4 は書き換え、3 だけ増えた
+  // 親機が受け取る分担表にも反映される(空欄の 4 は入らない)
+  assert.deepStrictEqual(post(e, { ...health, token: tok, db_uuid: 'aaaa0001', rows: [] }).assign,
+    { 2: 'parent-2', 3: 'parent-1', 10: 'parent-2', 11: 'parent-1' });
+  assert.throws(() => e.ctx.dashSetAssign(2, 'bad id!', ''), /親機 ID/);
+  assert.throws(() => e.ctx.dashSetAssign(-1, 'parent-1', ''), /ノード番号/);
+  assert.throws(() => e.ctx.dashSetAssign('x', 'parent-1', ''), /ノード番号/);
+
+  // 親機の操作画面へのリンク: スクリプトプロパティに置く。URL が空の親機は消す
+  const d3 = plain(e.ctx.dashSetLinks({ 'parent-1': { name: 'p3', url: 'http://parent-1.example:8080/' },
+    'parent-2': { name: 'par2', url: '' } }));
+  assert.deepStrictEqual(d3.links, { 'parent-1': { name: 'p3', url: 'http://parent-1.example:8080/' } });
+  assert.deepStrictEqual(JSON.parse(e.props.PARENT_LINKS), d3.links);
+  assert.throws(() => e.ctx.dashSetLinks({ 'parent-1': { name: 'x', url: 'javascript:alert(1)' } }), /URL/);
+  assert.throws(() => e.ctx.dashSetLinks({ 'bad id!': { name: 'x', url: 'http://a/' } }), /親機 ID/);
+  e.props.PARENT_LINKS = '{broken';
+  assert.deepStrictEqual(plain(e.ctx.dashData().links), {});
 }
 console.log('GAS tests passed');
