@@ -15,8 +15,10 @@ from typing import Any, Iterable, Optional
 MEAS_COLS = [
     "cycle_ts", "ts", "synced", "boot_id", "node", "mac", "status", "seq",
     "n_ok", "n_try", "med_us", "min_us", "max_us", "dist_cm", "child_uptime_s",
-    "fw", "tx_status", "rtt_ms", "raw",
+    "fw", "tx_status", "rtt_ms", "raw", "tries", "tx_retries", "rssi_up", "rssi_down",
 ]
+# 後から足した列(既存の DB には起動時に ALTER TABLE で足す)
+MEAS_ADDED = {"tries": "INTEGER", "tx_retries": "INTEGER", "rssi_up": "INTEGER", "rssi_down": "INTEGER"}
 HEALTH_COLS = [
     "ts", "synced", "boot_id", "uptime_s", "interval_s", "cycle_ms", "n_ok", "n_nodes",
     "cpu_temp", "load1", "mem_avail_mb", "disk_free_mb", "queue_m", "queue_h",
@@ -32,7 +34,8 @@ CREATE TABLE IF NOT EXISTS measurements (
     node INTEGER NOT NULL, mac TEXT NOT NULL, status TEXT NOT NULL, seq INTEGER,
     n_ok INTEGER, n_try INTEGER, med_us INTEGER, min_us INTEGER, max_us INTEGER,
     dist_cm REAL, child_uptime_s INTEGER, fw TEXT, tx_status INTEGER, rtt_ms INTEGER,
-    raw TEXT, sent INTEGER NOT NULL DEFAULT 0
+    raw TEXT, sent INTEGER NOT NULL DEFAULT 0,
+    tries INTEGER, tx_retries INTEGER, rssi_up INTEGER, rssi_down INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_meas_unsent ON measurements(sent, id);
 CREATE INDEX IF NOT EXISTS ix_meas_node_id ON measurements(node, id);
@@ -62,6 +65,10 @@ class Store:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(SCHEMA)
+            have = {r[1] for r in self._db.execute("PRAGMA table_info(measurements)")}
+            for col, typ in MEAS_ADDED.items():
+                if col not in have:   # 列を足す前の版で作った DB(未送信の行もそのまま残る)
+                    self._db.execute(f"ALTER TABLE measurements ADD COLUMN {col} {typ}")
             row = self._db.execute("SELECT value FROM meta WHERE key='db_uuid'").fetchone()
             if row is None:
                 self.db_uuid = uuid.uuid4().hex

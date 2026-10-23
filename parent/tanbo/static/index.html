@@ -494,6 +494,7 @@ function toggle(node) {
     if (r.min_us != null) s += `、${cm(usToCm(r.min_us))}〜${cm(usToCm(r.max_us))} cm`;
     if (r.n_try != null) s += `)`;
     if (r.rtt_ms != null) s += `、応答 ${r.rtt_ms} ms`;
+    if (r.rssi_up != null) s += `、電波 ${r.rssi_up} dBm`;
     if (r.tx_status) s += `、配送コード ${esc(txText(r.tx_status))}`;
     out.innerHTML = `${hms(Date.now() / 1000)} ${s}<br><small style="color:var(--ink-3)">記録には残りません</small>`;
   };
@@ -513,6 +514,10 @@ function renderDetailFacts(n) {
   ];
   if (last.tx_status) items.push(["配送コード", txText(last.tx_status)]);
   if (last.rtt_ms != null) items.push(["応答時間", `${last.rtt_ms} ms`]);
+  if (last.rssi_up != null || last.rssi_down != null) {
+    items.push(["電波 帰り/行き", `${last.rssi_up ?? "–"} / ${last.rssi_down ?? "–"} dBm`]);
+  }
+  if (last.tries > 1) items.push(["送り直し", `${last.tries - 1}回`]);
   if (last.child_uptime_s != null) items.push(["子機の稼働", dur(last.child_uptime_s)]);
   if (last.fw) items.push(["FW", last.fw]);
   f.innerHTML = items.map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("");

@@ -27,7 +27,7 @@
  *   親機の操作画面へのリンクはスクリプトプロパティ PARENT_LINKS に置く(公開リポジトリにホスト名を書かないため)。画面から編集できる。
  */
 
-const VERSION = '2.3.0';
+const VERSION = '2.4.0';
 const SPREADSHEET_ID = '1UDnr3DmX6d8fwvJzFMTeNSNxzkm9DyW7RCXji2xLfSQ';   // tambo_data2
 const TZ = 'Asia/Tokyo';
 const SHEET_LATEST = '最新';
@@ -51,7 +51,7 @@ const INITIAL_ASSIGN = [
 const MEAS_HEADER = [
   'Timestamp', 'CycleTime', 'Node', 'Status', 'Dist20_cm', 'EchoMed_us', 'EchoMin_us',
   'EchoMax_us', 'Valid', 'Tries', 'Seq', 'TxStatus', 'RTT_ms', 'ChildUptime_s', 'FW',
-  'ClockSynced', 'ParentRowId', 'Raw', 'Parent',
+  'ClockSynced', 'ParentRowId', 'Raw', 'Parent', 'Tries', 'TxRetries', 'RSSI_up_dBm', 'RSSI_down_dBm',
 ];
 const HEALTH_HEADER = [
   'Timestamp', 'Interval_s', 'Cycle_ms', 'OK', 'Nodes', 'Queue_m', 'Queue_h', 'Batt_V',
@@ -60,7 +60,7 @@ const HEALTH_HEADER = [
 ];
 const LATEST_HEADER = [
   'Node', '最終受信', 'Status', 'Dist20_cm', 'EchoMed_us', 'Valid/Tries', '最終OK時刻',
-  '最終OK距離_cm', '連続失敗', 'FW', '親機',
+  '最終OK距離_cm', '連続失敗', 'FW', '親機', 'RSSI_up_dBm', 'RSSI_down_dBm',
 ];
 const ASSIGN_HEADER = ['Node', '担当親機', '変更日時', '理由'];
 const OK_STATUSES = { OK: true, OK_V1: true };
@@ -171,6 +171,7 @@ function measRow_(r, pid) {
     toDate_(r.ts), toDate_(r.cycle_ts), r.node, r.status, v_(r.dist_cm), v_(r.med_us),
     v_(r.min_us), v_(r.max_us), v_(r.n_ok), v_(r.n_try), v_(r.seq), v_(r.tx_status),
     v_(r.rtt_ms), v_(r.child_uptime_s), v_(r.fw), v_(r.synced), r.id, v_(r.raw), pid,
+    v_(r.tries), v_(r.tx_retries), v_(r.rssi_up), v_(r.rssi_down),
   ];
 }
 
@@ -247,7 +248,7 @@ function updateLatest_(ss, rows, pid) {
   });
 
   rows.forEach(function (r) {
-    const prev = byNode[r.node] || [r.node, '', '', '', '', '', '', '', 0, '', ''];
+    const prev = byNode[r.node] || [r.node, '', '', '', '', '', '', '', 0, '', '', '', ''];
     const ok = OK_STATUSES[r.status] === true;
     byNode[r.node] = [
       r.node, toDate_(r.ts), r.status, v_(r.dist_cm), v_(r.med_us),
@@ -257,6 +258,7 @@ function updateLatest_(ss, rows, pid) {
       ok ? 0 : (Number(prev[8]) || 0) + 1,
       v_(r.fw) || prev[9],
       pid,
+      v_(r.rssi_up), v_(r.rssi_down),
     ];
   });
 
@@ -425,6 +427,7 @@ function dashData() {
         node: node, ts: ms_(r[1]), status: String(r[2]), dist: num_(r[3]), med: num_(r[4]),
         valid: r[5] instanceof Date ? Utilities.formatDate(r[5], TZ, 'M/d') : String(r[5]),
         okTs: ms_(r[6]), okDist: num_(r[7]), fails: Number(r[8]) || 0, fw: String(r[9]), parent: String(r[10]),
+        rssiUp: num_(r[11]), rssiDown: num_(r[12]),
       });
     });
   }
@@ -678,6 +681,10 @@ function writeHelp_(ss) {
     ['UploadErr', '送信エラー。NET = 回線、TIMEOUT = 時間切れ、HTTP = 4xx/5xx、RESP = JSON でない応答、GAS = 受理されず、ERR = その他'],
     ['ClockSynced', '記録時に親機の時計が NTP 同期済みだったか(1/0)'],
     ['ParentRowId', '親機 DB の行 ID(重複排除用)'],
+    ['Tries', 'そのサイクルで送った REQ の回数(TIMEOUT / TX_FAIL のときの送り直しを含む)'],
+    ['TxRetries', '最後の REQ の配送で XBee が送信をやり直した回数(行きの電波の苦労)'],
+    ['RSSI_up_dBm', '帰り(子機 → 親機)の電波の強さ。応答を受けた直後の親機の XBee の DB。中継があれば最後の 1 区間'],
+    ['RSSI_down_dBm', '行き(親機 → 子機)の電波の強さ。子機の XBee の DB をリモート AT で読んだ値。読めなければ空'],
     ['', ''],
     ['OK', '正常'],
     ['NO_ECHO', '子機は応答したが有効エコーが 0 回(水面が測定範囲外、管内の障害物など)'],

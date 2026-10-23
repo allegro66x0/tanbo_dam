@@ -17,7 +17,10 @@ class XBeeCfg:
     baud: int = 9600
     reply_timeout_s: float = 3.0   # REQ 送信から応答を待つ上限
     gap_s: float = 0.2             # ノード間の送信間隔
-    retries: int = 1               # TIMEOUT / TX_FAIL のとき、同じサイクルの中で送り直す回数
+    retries: int = 2               # TIMEOUT / TX_FAIL のとき、同じサイクルの中で送り直す回数
+    rssi: bool = True              # 応答を受けたら親機の XBee の DB(帰りの電波の強さ)を読む
+    rssi_remote: bool = True       # 配送できたら子機の XBee の DB(行きの強さ)をリモート AT で読む
+    rssi_timeout_s: float = 1.5    # リモート AT の応答を待つ上限
 
 
 @dataclass
@@ -166,6 +169,8 @@ def load(path: str | Path) -> Config:
         raise ConfigError("xbee.reply_timeout_s は正の値")
     if not 0 <= cfg.xbee.retries <= 5:
         raise ConfigError("xbee.retries は 0〜5")
+    if not 0 < cfg.xbee.rssi_timeout_s <= 10:
+        raise ConfigError("xbee.rssi_timeout_s は 0〜10 秒")
     if cfg.local is not None:
         if cfg.local.node in cfg.nodes:
             raise ConfigError(f"local.node = {cfg.local.node} は [nodes] と重なっています")

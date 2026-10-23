@@ -746,3 +746,14 @@ sudo systemctl daemon-reload && sudo systemctl restart tanbo-parent && sudo syst
 ### 親機の再送
 - `[xbee] retries`(既定 1、0〜5): TIMEOUT / TX_FAIL のとき同じサイクルの中で送り直す。前の REQ への応答が遅れて届いたらそれを採用する
 - テストは par2 で 39 件すべて通った(WSL が無いので、`/tmp` にコードを送って par2 の venv で実行)。par2 に入れて 17:33 に再起動
+
+### 電波の記録(計画 docs/plan_link_quality.md の 1)
+- 再送の既定を 2 にした(設定に書かなくても 2)
+- 計測の行に `tries`(送った REQ の回数)、`tx_retries`(最後の REQ の Transmit Status の送信やり直し回数)、
+  `rssi_up`(応答直後の親機の XBee の DB = 帰り)、`rssi_down`(配送できたときに子機の XBee の DB をリモート AT で = 行き)。dBm の負の整数
+- 既存の DB には起動時に `ALTER TABLE` で列を足す。操作画面は列がある DB だけ読む。GAS v2.4.0 は data_ と「最新」の末尾に列を足す
+- テスト: par2 の `/tmp` で 42 件すべて通過
+- par2 に入れて 19:05 に再起動。19:10 の初めての値:
+  node 1(約 86 m)rssi_up −47 / **rssi_down −100 dBm**、node 2(par2 の脇)−47 / −39 dBm。どちらも 1 回目で OK、tx_retries 0
+  - node 1 の行きの −100 dBm は XBee 3 の受信感度(約 −103 dBm)のすぐ上。**余裕が 3 dB ほどしかない** → 時間帯で届いたり届かなかったりする理由に合う
+  - node 1 の帰りが −47 dBm と強いのは、応答が par2 の脇の node 2 を中継して届いている(DB は最後の 1 区間)とみられる。要確認

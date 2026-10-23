@@ -222,7 +222,7 @@
     var byNode = {};
     D.assign.forEach(function (a) { byNode[a.node] = a.parent; });
     var html = '<tr><th>Node</th><th>状態</th><th>距離</th><th>有効</th><th>最終受信</th><th>最後に OK</th>' +
-      '<th>連続失敗</th><th>測った親機</th><th>担当</th><th>FW</th></tr>';
+      '<th>連続失敗</th><th>電波 帰り/行き</th><th>測った親機</th><th>担当</th><th>FW</th></tr>';
     D.nodes.forEach(function (n) {
       var stale = n.ts && D.now - n.ts > STALE_ROW_MS;
       var local = localOwner(n.node);
@@ -238,6 +238,8 @@
         '<td>' + esc(ago(n.ts)) + '</td>' +
         '<td>' + (n.okTs ? esc(hm(n.okTs)) + (cm(n.okDist) ? '(' + esc(cm(n.okDist)) + ')' : '') : '—') + '</td>' +
         '<td class="num">' + (n.fails ? '<span class="pill bad">' + esc(n.fails) + '</span>' : '0') + '</td>' +
+        '<td class="num">' + (blank(n.rssiUp) && blank(n.rssiDown) ? '—'
+          : esc((blank(n.rssiUp) ? '–' : n.rssiUp) + ' / ' + (blank(n.rssiDown) ? '–' : n.rssiDown) + ' dBm')) + '</td>' +
         '<td>' + esc(n.parent ? parentName(n.parent) : '—') + '</td>' +
         '<td>' + esc(assignText) + (mismatch ? ' <span class="note">次の計測から切り替わる</span>' : '') + '</td>' +
         '<td class="sub">' + esc(n.fw || '') + '</td>' +

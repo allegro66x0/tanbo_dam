@@ -9,11 +9,11 @@
 ## 構成
 
 - `parent/` 親機(Raspberry Pi 4、Python 3.11+)。パッケージ `tanbo`、systemd サービス `tanbo-parent`、操作 CLI `tanboctl`
-  - poller.py: 壁時計に揃えた周期で全ノードへ `REQ,<seq>` → seq 一致の応答だけ採用。TIMEOUT / TX_FAIL は同じサイクルで `[xbee] retries` 回まで送り直す
+  - poller.py: 壁時計に揃えた周期で全ノードへ `REQ,<seq>` → seq 一致の応答だけ採用。TIMEOUT / TX_FAIL は同じサイクルで `[xbee] retries` 回(既定 2)まで送り直す。電波の記録(rssi_up / rssi_down / tries / tx_retries)
   - store.py: SQLite(WAL)に先に書く store-and-forward
   - uploader.py: 未送信をまとめて GAS へ POST、返ってきた hwm まで送信済みにする。応答の分担表を assign へ渡す
   - assign.py: GAS の分担表(ノード → 担当親機)。自分の担当だけを測る。SQLite に保存し、受け取るまでは `[assign] initial`
-  - radio.py: digi-xbee、送信は非同期、Transmit Status と受信をイベントキューへ
+  - radio.py: digi-xbee、送信は非同期、Transmit Status と受信をイベントキューへ。電波の強さはローカル / リモート AT DB
   - local.py: 親機の地点のセンサ。設定 `[local]`。`type = "usb"`(既定)は USB の ESP32(子機と同じファーム、USB 上で同じ REQ / D2)、
     `type = "gpio"` は GPIO 直結の HC-SR04(libgpiod のエッジイベントでパルス幅、子機と同じ測り方)
   - web.py + static/index.html: 操作画面(別プロセス tanbo-web)。SQLite を読み取り専用で読み、操作は制御ソケット経由。標準ライブラリのみ

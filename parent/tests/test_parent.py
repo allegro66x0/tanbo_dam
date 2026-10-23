@@ -126,6 +126,7 @@ port = "{port}"
 reply_timeout_s = 1.0
 gap_s = 0.02
 retries = {sched.get('retries', 0)}
+{sched.get('xbee_extra', '')}
 [schedule]
 interval_s = {sched.get('interval_s', 600)}
 check_interval_s = {sched.get('check_interval_s', 60)}
@@ -304,6 +305,69 @@ def test_retry_within_cycle(env):
     # 記録は 1 ノード 1 行のまま
     assert app.store.unsent_count("m") == 7
     app.radio.close()
+
+
+def test_radio_quality_is_recorded(env):
+    tmp, gas, emu, cfg, children = env
+    cfg = make_cfg(tmp, emu.port, gas.url, {n: MACS[n] for n in (0, 2, 3, 5)}, retries=1)
+    children[MACS[0]].rssi, children[MACS[0]].tx_retries = 55, 2
+    children[MACS[3]].kind = "lossy"
+    children[MACS[5]].remote_at = False   # リモート AT に答えない子機
+    app = App(cfg)
+    app.radio.open()
+    res = {r.node: r.row for r in app.poller.run_cycle(time.time())}
+    # 帰り = 親機の XBee の DB(エミュレータは −45)、行き = 子機の XBee の DB(リモート AT)
+    assert (res[0]["rssi_up"], res[0]["rssi_down"], res[0]["tries"], res[0]["tx_retries"]) == (-45, -55, 1, 2)
+    assert res[3]["status"] == "OK" and res[3]["tries"] == 2 and res[3]["rssi_down"] == -60
+    # 届かない子機: 送り直しを含めて 2 回、電波は読まない(配送できていない)
+    assert res[2]["status"] == "TX_FAIL" and res[2]["tries"] == 2
+    assert res[2].get("rssi_up") is None and res[2].get("rssi_down") is None
+    assert children[MACS[2]].remote_at_log == []
+    # リモート AT に答えない子機でもサイクルは止まらず、行きだけ None
+    assert res[5]["status"] == "NO_ECHO" and res[5]["rssi_up"] == -45 and res[5].get("rssi_down") is None
+    # DB に残り、GAS への送信にも入る
+    app.uploader.upload_once()
+    sent = {r["node"]: r for r in gas.rows["m"]}
+    assert sent[0]["rssi_up"] == -45 and sent[0]["rssi_down"] == -55 and sent[0]["tx_retries"] == 2
+    assert sent[3]["tries"] == 2
+    app.radio.close()
+
+
+def test_radio_quality_can_be_disabled(env):
+    tmp, gas, emu, cfg, children = env
+    cfg = make_cfg(tmp, emu.port, gas.url, {0: MACS[0]},
+                   xbee_extra="rssi = false\nrssi_remote = false")
+    app = App(cfg)
+    app.radio.open()
+    row = app.poller.run_cycle(time.time())[0].row
+    assert row["status"] == "OK" and row.get("rssi_up") is None and row.get("rssi_down") is None
+    assert children[MACS[0]].remote_at_log == [] and row["tries"] == 1
+    app.radio.close()
+
+
+def test_store_adds_radio_columns_to_old_db(tmp_path):
+    import sqlite3
+    from tanbo import store as store_mod
+    path = str(tmp_path / "old.db")
+    # 列を足す前の版の measurements(未送信の行が 1 つ残っている)
+    old_schema = store_mod.SCHEMA.replace(
+        ",\n    tries INTEGER, tx_retries INTEGER, rssi_up INTEGER, rssi_down INTEGER", "")
+    assert "rssi_up" not in old_schema
+    db = sqlite3.connect(path)
+    db.executescript(old_schema)
+    db.execute("INSERT INTO meta VALUES ('db_uuid', 'abcdef0123456789')")
+    db.execute("INSERT INTO measurements (cycle_ts, ts, node, mac, status) VALUES (1, 1, 0, 'M', 'OK')")
+    db.commit()
+    db.close()
+    st = store_mod.Store(path)
+    assert st.db_uuid == "abcdef0123456789"
+    rows = st.fetch_unsent("m", 10)
+    assert len(rows) == 1 and rows[0]["status"] == "OK" and rows[0]["rssi_up"] is None
+    st.add_measurements([{"cycle_ts": 2, "ts": 2, "node": 0, "mac": "M", "status": "OK",
+                          "rssi_up": -50, "tries": 1}])
+    assert st.fetch_unsent("m", 10)[1]["rssi_up"] == -50
+    st.close()
+    store_mod.Store(path).close()   # 2 回目に開いても列を足し直さない
 
 
 def test_retries_config_validation(env):

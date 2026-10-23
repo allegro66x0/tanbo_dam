@@ -504,4 +504,34 @@ assert.strictEqual(env.opened[env.opened.length - 1], 'other');
   e.props.PARENT_LINKS = '{broken';
   assert.deepStrictEqual(plain(e.ctx.dashData().links), {});
 }
+// ---------------------------------------------------------------- 電波の記録(v2.4.0)
+{
+  const e = makeEnv();
+  e.ctx.setup();
+  const tok = e.props.TOKEN;
+  const r0 = { ...meas.rows[0], id: 1, node: 1, tries: 2, tx_retries: 1, rssi_up: -71, rssi_down: -68 };
+  const r1 = { ...meas.rows[0], id: 2, node: 2 };   // 列を足す前の親機(電波の項目なし)
+  assert.ok(post(e, { ...meas, token: tok, db_uuid: 'dddd0001', rows: [r0, r1] }).ok);
+  const month3 = e.ctx.Utilities.formatDate(new Date(r0.ts * 1000), 'Asia/Tokyo', 'yyyy-MM');
+  const ds = e.sheets['data_' + month3];
+  assert.deepStrictEqual(ds.data[0].slice(19), ['Tries', 'TxRetries', 'RSSI_up_dBm', 'RSSI_down_dBm']);
+  const row1 = ds.data.find((r) => r[2] === 1);
+  assert.deepStrictEqual(row1.slice(18), ['parent-1', 2, 1, -71, -68]);
+  assert.deepStrictEqual(ds.data.find((r) => r[2] === 2).slice(19), ['', '', '', '']);
+  const lt = e.sheets['最新'];
+  assert.deepStrictEqual(lt.data[0].slice(11), ['RSSI_up_dBm', 'RSSI_down_dBm']);
+  assert.deepStrictEqual(lt.data.find((r) => r[0] === 1).slice(11), [-71, -68]);
+  // 画面: ノードに rssiUp / rssiDown(無ければ null)
+  e.activeUser = 'me@example.com';
+  const nodes = JSON.parse(JSON.stringify(e.ctx.dashData().nodes));
+  assert.deepStrictEqual([nodes.find((n) => n.node === 1).rssiUp, nodes.find((n) => n.node === 1).rssiDown], [-71, -68]);
+  assert.strictEqual(nodes.find((n) => n.node === 2).rssiUp, null);
+  // 列を足す前に作った「最新」(11 列)にも、見出しと値が足される
+  const g = makeEnv();
+  g.ctx.setup();
+  const lt2 = g.sheets['最新'];
+  lt2.data[0] = lt2.data[0].slice(0, 11);
+  post(g, { ...meas, token: g.props.TOKEN, db_uuid: 'eeee0001', rows: [r0] });
+  assert.deepStrictEqual(lt2.data[0].slice(11), ['RSSI_up_dBm', 'RSSI_down_dBm']);
+}
 console.log('GAS tests passed');

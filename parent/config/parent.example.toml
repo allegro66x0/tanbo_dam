@@ -8,7 +8,10 @@ port = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ04PSC2-if00-port0"
 baud = 9600
 reply_timeout_s = 3.0   # REQ 送信から応答を待つ上限(子機のバースト測定は約0.5秒)
 gap_s = 0.2             # ノード間の送信間隔
-retries = 1             # TIMEOUT / TX_FAIL のとき同じサイクルの中で送り直す回数(0〜5)
+retries = 2             # TIMEOUT / TX_FAIL のとき同じサイクルの中で送り直す回数(0〜5)
+rssi = true             # 応答を受けたら親機の XBee の DB(帰りの電波の強さ)を記録する
+rssi_remote = true      # 配送できたら子機の XBee の DB(行きの強さ)をリモート AT で読んで記録する(無線が 1 往復増える)
+rssi_timeout_s = 1.5
 
 [schedule]
 interval_s = 600               # 通常運用: 10分。毎時 00,10,20... 分に揃う

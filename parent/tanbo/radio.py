@@ -116,6 +116,43 @@ class XBeeRadio:
                 raise RadioError(f"AT AI failed: {e}") from e
             return int.from_bytes(v, "big") if v else None
 
+    def local_rssi(self) -> Optional[int]:
+        """親機の XBee が最後に受け取った RF パケットの強さ(AT DB、dBm の負の整数)。読めなければ None。
+
+        応答を受け取った直後に読めば、子機 → 親機(帰り)の強さ。中継を経由していれば最後の 1 区間の値。
+        """
+        with self._lock:
+            dev = self._dev
+            if dev is None or not dev.is_open():
+                return None
+            try:
+                v = dev.get_parameter("DB")
+            except Exception:
+                return None
+        return -int.from_bytes(v, "big") if v else None
+
+    def remote_rssi(self, mac: str, timeout_s: float) -> Optional[int]:
+        """子機の XBee が最後に受け取ったパケット(親機からの REQ)の強さ。リモート AT DB(0x17 → 0x97)。
+
+        答えるのは子機の XBee 自身なので ESP32 は関係ない。無線を 1 往復増やす。読めなければ None。
+        """
+        from digi.xbee.devices import RemoteXBeeDevice
+        from digi.xbee.models.address import XBee64BitAddress
+
+        with self._lock:
+            dev = self._dev
+            if dev is None or not dev.is_open():
+                return None
+            old = dev.get_sync_ops_timeout()
+            try:
+                dev.set_sync_ops_timeout(timeout_s)
+                v = RemoteXBeeDevice(dev, XBee64BitAddress.from_hex_string(mac)).get_parameter("DB")
+            except Exception:
+                return None
+            finally:
+                dev.set_sync_ops_timeout(old)
+        return -int.from_bytes(v, "big") if v else None
+
     def _on_packet(self, packet) -> None:
         # digi-xbee の受信スレッドから呼ばれる。重い処理はしない。
         from digi.xbee.packets.aft import ApiFrameType

@@ -18,6 +18,7 @@ AT_VALUES = {
     b"AP": b"\x01", b"HV": b"\x42\x00", b"VR": b"\x10\x0D", b"SH": COORD_MAC[:4],
     b"SL": COORD_MAC[4:], b"MY": b"\x00\x00", b"NI": b"COORD", b"CE": b"\x01",
     b"AI": b"\x00", b"BR": b"\x01", b"ID": b"\x00" * 8, b"CH": b"\x0F",
+    b"DB": b"\x2d",   # 最後に受けたパケットの強さ −45 dBm
 }
 
 
@@ -32,7 +33,11 @@ class ChildModel:
     echo_us: int = 3500
     delay: float = 0.15
     late_delay: float = 0.0
+    rssi: int = 60            # リモート AT DB の値(−60 dBm)
+    remote_at: bool = True    # False: リモート AT に答えない(帰りが落ちる子機)
+    tx_retries: int = 0       # Transmit Status の送信やり直し回数
     requests: list = field(default_factory=list)
+    remote_at_log: list = field(default_factory=list)
 
 
 class XBeeEmulator:
@@ -109,15 +114,24 @@ class XBeeEmulator:
                 val = AT_VALUES.get(cmd, b"\x00")
                 st = 0
             self._write(b"\x88" + bytes([fid]) + cmd + bytes([st]) + val)
+        elif ft == 0x17:  # Remote AT command → 子機の XBee が 0x97 で答える
+            fid, dest, cmd = d[1], d[2:10], d[13:15]
+            child = self.children.get(dest.hex().upper())
+            if child is None or child.kind == "dead" or not child.remote_at:
+                return
+            child.remote_at_log.append(cmd)
+            val = bytes([child.rssi]) if cmd == b"DB" else b"\x00"
+            self._later(0.05, lambda: self._write(
+                b"\x97" + bytes([fid]) + dest + b"\xff\xfe" + cmd + b"\x00" + val))
         elif ft == 0x10:  # Transmit request
             fid, dest, payload = d[1], d[2:10].hex().upper(), d[14:]
             child = self.children.get(dest)
             self._on_tx(fid, dest, payload, child)
 
-    def _tx_status(self, fid: int, status: int, delay: float):
+    def _tx_status(self, fid: int, status: int, delay: float, retries: int = 0):
         if fid:
             self._later(delay, lambda: self._write(
-                b"\x8b" + bytes([fid]) + b"\xff\xfe" + b"\x00" + bytes([status]) + b"\x00"))
+                b"\x8b" + bytes([fid]) + b"\xff\xfe" + bytes([retries]) + bytes([status]) + b"\x00"))
 
     def _on_tx(self, fid, dest, payload: bytes, child: Optional[ChildModel]):
         if dest == COORD_MAC.hex().upper():
@@ -128,7 +142,7 @@ class XBeeEmulator:
             self._tx_status(fid, 0x21, 0.3)   # Network ACK failure
             return
         child.requests.append(payload)
-        self._tx_status(fid, 0x00, 0.03)
+        self._tx_status(fid, 0x00, 0.03, child.tx_retries)
         text = payload.decode().strip()
         seq = int(text.split(",")[1]) if "," in text else -1
         k = child.kind

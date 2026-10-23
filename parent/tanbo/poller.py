@@ -6,6 +6,8 @@
 - TIMEOUT / TX_FAIL のノードには、同じサイクルの中で [xbee] retries 回まで送り直す。
   前の REQ への応答が遅れて届いた場合も、そのサイクルの応答として採用する
   (現地の 86 m の子機で、REQ は届くのに応答が落ちる TIMEOUT が半分ほど出た。2026-10-23)
+- 電波の記録: rssi_up(帰り、親機の XBee の DB)、rssi_down(行き、子機の XBee の DB をリモート AT で)、
+  tries(送った REQ の回数)、tx_retries(最後の REQ の Transmit Status の送信やり直し回数)
 - 親機の地点のセンサ([local])は USB シリアルで同じ REQ / D2 をやりとりする。XBee の状態に関係なく測る
 """
 from __future__ import annotations
@@ -201,14 +203,20 @@ class Poller(threading.Thread):
         """poll_one を、TIMEOUT / TX_FAIL のとき retries 回まで繰り返す。"""
         earlier: set[int] = set()
         res = self.poll_one(node, mac)
+        tries = 1
         for i in range(self.cfg.xbee.retries):
             if res.status not in ("TIMEOUT", "TX_FAIL") or self.stop_event.is_set():
                 break
             earlier.add(res.row["seq"])
             time.sleep(self.cfg.xbee.gap_s)
             res = self.poll_one(node, mac, earlier)
+            tries += 1
             if res.status not in ("TIMEOUT", "TX_FAIL"):
                 log.info("node %d: 送り直し %d 回目で %s", node, i + 1, res.status)
+        res.row["tries"] = tries
+        if self.cfg.xbee.rssi_remote and res.row.get("tx_status") == 0:
+            # 配送できた(行きは届いた)ときだけ。帰りが落ちる子機ではこの応答も落ちやすい → None
+            res.row["rssi_down"] = self.radio.remote_rssi(mac, self.cfg.xbee.rssi_timeout_s)
         return res
 
     def poll_one(self, node: int, mac: str, earlier: Optional[set[int]] = None) -> PollResult:
@@ -239,6 +247,7 @@ class Poller(threading.Thread):
             if isinstance(ev, TxStatusEvent):
                 if ev.frame_id == fid:
                     tx_status = ev.status
+                    row["tx_retries"] = ev.retries
                     if ev.status != 0:
                         status = "TX_FAIL"
                         break
@@ -271,6 +280,8 @@ class Poller(threading.Thread):
                 row.update(dist_cm=rep.dist_cm, seq=None, fw="v1")
             break
 
+        if self.cfg.xbee.rssi and status not in ("TIMEOUT", "TX_FAIL"):
+            row["rssi_up"] = self.radio.local_rssi()   # 応答を受けた直後 = 子機からの応答の強さ
         row["status"] = status
         row["tx_status"] = tx_status
         row["ts"] = time.time()

@@ -103,6 +103,10 @@ class InterfaceAllowlist:
 
 
 # ---------------------------------------------------------------- data access
+HISTORY_COLS = ["ts", "status", "dist_cm", "min_us", "max_us", "n_ok", "n_try"]
+RADIO_COLS = ["tries", "tx_retries", "rssi_up", "rssi_down"]   # 電波の記録(後から足した列)
+
+
 class ReadOnlyDB:
     def __init__(self, path: str):
         self.path = path
@@ -112,13 +116,20 @@ class ReadOnlyDB:
         db.row_factory = sqlite3.Row
         return db
 
+    @staticmethod
+    def _radio_cols(db: sqlite3.Connection) -> list[str]:
+        """電波の列(後から足した列)のうち、この DB にあるもの。計測サービスが列を足す前の DB でも読めるように。"""
+        have = {r[1] for r in db.execute("PRAGMA table_info(measurements)")}
+        return [c for c in RADIO_COLS if c in have]
+
     def nodes(self, node_ids: list[int]) -> list[dict[str, Any]]:
         out = []
         with self._connect() as db:
+            extra = "".join(", " + c for c in self._radio_cols(db))
             for n in node_ids:
                 last = db.execute(
                     "SELECT ts, status, dist_cm, med_us, min_us, max_us, n_ok, n_try, fw, rtt_ms, "
-                    "tx_status, child_uptime_s, id FROM measurements WHERE node=? "
+                    f"tx_status, child_uptime_s{extra}, id FROM measurements WHERE node=? "
                     "ORDER BY id DESC LIMIT 1", (n,)).fetchone()
                 ok = db.execute(
                     "SELECT id, ts, dist_cm FROM measurements WHERE node=? AND status IN (?,?) "
@@ -143,15 +154,16 @@ class ReadOnlyDB:
             cur = db.execute("SELECT * FROM health ORDER BY id DESC LIMIT ?", (limit,))
             return [dict(r) for r in cur.fetchall()]
 
-    def history(self, node: int, hours: float) -> list[list[Any]]:
+    def history(self, node: int, hours: float) -> tuple[list[str], list[list[Any]]]:
         since = time.time() - hours * 3600
         with self._connect() as db:
+            cols = HISTORY_COLS + self._radio_cols(db)
             cur = db.execute(
-                "SELECT ts, status, dist_cm, min_us, max_us, n_ok, n_try FROM measurements "
+                f"SELECT {', '.join(cols)} FROM measurements "
                 "WHERE node=? AND ts>=? ORDER BY ts DESC LIMIT ?", (node, since, HISTORY_MAX_ROWS))
             rows = [list(r) for r in cur.fetchall()]
         rows.reverse()
-        return rows
+        return cols, rows
 
 
 # ---------------------------------------------------------------- HTTP
@@ -260,10 +272,8 @@ def make_handler(app: WebApp):
                     if node not in app.cfg.node_ids():
                         self._json(404, {"error": "そのノードは設定にありません"})
                         return
-                    self._json(200, {"node": node, "hours": hours,
-                                     "cols": ["ts", "status", "dist_cm", "min_us", "max_us",
-                                              "n_ok", "n_try"],
-                                     "rows": app.db.history(node, hours)})
+                    cols, rows = app.db.history(node, hours)
+                    self._json(200, {"node": node, "hours": hours, "cols": cols, "rows": rows})
                 else:
                     self._send(404, b"not found", "text/plain")
             except (KeyError, ValueError):
