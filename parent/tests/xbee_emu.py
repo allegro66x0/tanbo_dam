@@ -27,7 +27,7 @@ def frame(data: bytes) -> bytes:
 
 @dataclass
 class ChildModel:
-    """kind: v2 | v1 | dead | mute | late | garbage | noecho | flaky"""
+    """kind: v2 | v1 | dead | mute | late | garbage | noecho | flaky | lossy(奇数回目の REQ に応答しない)"""
     kind: str = "v2"
     echo_us: int = 3500
     delay: float = 0.15
@@ -134,6 +134,8 @@ class XBeeEmulator:
         k = child.kind
         if k == "flaky":
             k = random.choice(["v2", "v2", "mute"])
+        if k == "lossy":   # REQ は届くが応答が落ちる(現地の 86 m の子機の TIMEOUT)
+            k = "mute" if len(child.requests) % 2 else "v2"
         if k == "mute":
             return
         if k == "v1":

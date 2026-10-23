@@ -3,6 +3,9 @@
 - 周期は壁時計の境界(interval の倍数 + offset)に揃える
 - 一時的な周期の上書き(設置チェック用)は期限付き。期限が来たら通常周期に戻る
 - 1サイクル = 全ノードへ順に REQ,<seq> を送り、seq が一致した応答だけ採用
+- TIMEOUT / TX_FAIL のノードには、同じサイクルの中で [xbee] retries 回まで送り直す。
+  前の REQ への応答が遅れて届いた場合も、そのサイクルの応答として採用する
+  (現地の 86 m の子機で、REQ は届くのに応答が落ちる TIMEOUT が半分ほど出た。2026-10-23)
 - 親機の地点のセンサ([local])は USB シリアルで同じ REQ / D2 をやりとりする。XBee の状態に関係なく測る
 """
 from __future__ import annotations
@@ -194,7 +197,22 @@ class Poller(threading.Thread):
         self._seq = (self._seq + 1) & 0xFFFF
         return self._seq
 
-    def poll_one(self, node: int, mac: str) -> PollResult:
+    def poll_with_retry(self, node: int, mac: str) -> PollResult:
+        """poll_one を、TIMEOUT / TX_FAIL のとき retries 回まで繰り返す。"""
+        earlier: set[int] = set()
+        res = self.poll_one(node, mac)
+        for i in range(self.cfg.xbee.retries):
+            if res.status not in ("TIMEOUT", "TX_FAIL") or self.stop_event.is_set():
+                break
+            earlier.add(res.row["seq"])
+            time.sleep(self.cfg.xbee.gap_s)
+            res = self.poll_one(node, mac, earlier)
+            if res.status not in ("TIMEOUT", "TX_FAIL"):
+                log.info("node %d: 送り直し %d 回目で %s", node, i + 1, res.status)
+        return res
+
+    def poll_one(self, node: int, mac: str, earlier: Optional[set[int]] = None) -> PollResult:
+        """earlier: 同じサイクルで先に送った REQ の seq。遅れて届いたその応答も採用する。"""
         seq = self._next_seq()
         row: dict[str, Any] = {"node": node, "mac": mac, "seq": seq}
         t0 = time.monotonic()
@@ -237,8 +255,11 @@ class Poller(threading.Thread):
                 row["rtt_ms"] = int((ev.t - t0) * 1000)
                 break
             if rep.version == 2 and rep.seq != seq:
-                log.info("node %d late reply seq=%s (want %d) ignored", node, rep.seq, seq)
-                continue
+                if not (earlier and rep.seq in earlier):
+                    log.info("node %d late reply seq=%s (want %d) ignored", node, rep.seq, seq)
+                    continue
+                row["seq"] = rep.seq   # 前の REQ への応答(遅れて届いた)
+                log.info("node %d: 前の REQ(seq=%s)への応答を採用", node, rep.seq)
             row["rtt_ms"] = int((ev.t - t0) * 1000)
             if rep.version == 2:
                 status = "OK" if rep.n_ok else "NO_ECHO"
@@ -374,7 +395,7 @@ class Poller(threading.Thread):
                 continue
             self.heartbeat = time.monotonic()
             if radio_ok and self.radio.is_open:
-                res = self.poll_one(node, mac)
+                res = self.poll_with_retry(node, mac)
                 time.sleep(self.cfg.xbee.gap_s)
             else:
                 res = PollResult(node, mac, "RADIO_ERR",

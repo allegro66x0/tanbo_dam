@@ -125,6 +125,7 @@ def make_cfg(tmp, port, url, nodes, extra="", **sched):
 port = "{port}"
 reply_timeout_s = 1.0
 gap_s = 0.02
+retries = {sched.get('retries', 0)}
 [schedule]
 interval_s = {sched.get('interval_s', 600)}
 check_interval_s = {sched.get('check_interval_s', 60)}
@@ -257,6 +258,7 @@ def test_cycle_statuses_and_upload(env):
     res2 = app.poller.run_cycle(time.time())
     assert {r.node: r.status for r in res2}[6] == "TIMEOUT"
 
+
     # アップロード: 1回目は 500 で失敗 → 未送信のまま、2回目で送信済み
     gas.fail_next = 1
     with pytest.raises(Exception) as ei:
@@ -280,6 +282,35 @@ def test_cycle_statuses_and_upload(env):
     assert h["n_nodes"] == 7 and h["n_ok"] == 2 and h["xbee_ai"] == 0
     json.dump(gas.requests[-3:], open(os.path.join(tmp, "payloads.json"), "w"))
     app.radio.close()
+
+
+def test_retry_within_cycle(env):
+    tmp, gas, emu, cfg, children = env
+    cfg = make_cfg(tmp, emu.port, gas.url, {n: MACS[n] for n in range(7)}, retries=1)
+    children[MACS[3]].kind = "lossy"   # 1 回目の REQ への応答だけ落ちる
+    app = App(cfg)
+    app.radio.open()
+    res = {r.node: r for r in app.poller.run_cycle(time.time())}
+    # 応答が落ちたノードは、送り直しの REQ への応答で OK
+    assert res[3].status == "OK" and len(children[MACS[3]].requests) == 2
+    assert res[3].row["seq"] == int(children[MACS[3]].requests[1].split(b",")[1])
+    # 前の REQ への応答が遅れて(送り直しの待ち時間の中で)届いたら、それを採用する
+    assert res[6].status == "OK" and len(children[MACS[6]].requests) == 2
+    assert res[6].row["seq"] == int(children[MACS[6]].requests[0].split(b",")[1])
+    # 届かないノードは retries 回まで送り直して、最後の結果を残す。うまくいったノードは 1 回だけ
+    assert res[2].status == "TX_FAIL" and len(children[MACS[2]].requests) == 0
+    assert res[0].status == "OK" and len(children[MACS[0]].requests) == 1
+    assert res[5].status == "NO_ECHO" and len(children[MACS[5]].requests) == 1   # 応答があれば送り直さない
+    # 記録は 1 ノード 1 行のまま
+    assert app.store.unsent_count("m") == 7
+    app.radio.close()
+
+
+def test_retries_config_validation(env):
+    tmp, gas, emu, cfg, children = env
+    assert cfg.xbee.retries == 0
+    with pytest.raises(config_mod.ConfigError):
+        make_cfg(tmp, emu.port, gas.url, {0: MACS[0]}, retries=9)
 
 
 def test_own_address_is_skipped(env):

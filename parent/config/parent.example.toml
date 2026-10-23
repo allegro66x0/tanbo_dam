@@ -8,6 +8,7 @@ port = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AQ04PSC2-if00-port0"
 baud = 9600
 reply_timeout_s = 3.0   # REQ 送信から応答を待つ上限(子機のバースト測定は約0.5秒)
 gap_s = 0.2             # ノード間の送信間隔
+retries = 1             # TIMEOUT / TX_FAIL のとき同じサイクルの中で送り直す回数(0〜5)
 
 [schedule]
 interval_s = 600               # 通常運用: 10分。毎時 00,10,20... 分に揃う
